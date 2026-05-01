@@ -15,7 +15,7 @@ from flow_doctor.core.errors import ConfigError
 
 @dataclass
 class NotifyChannelConfig:
-    type: str  # "slack", "email", or "github"
+    type: str  # "slack", "email", "github", or "s3"
     # Slack fields
     webhook_url: Optional[str] = None
     channel: Optional[str] = None
@@ -29,6 +29,14 @@ class NotifyChannelConfig:
     repo: Optional[str] = None
     token: Optional[str] = None
     labels: Optional[List[str]] = None
+    # S3 fields (writes schema-1.0.0 entries to the system-wide changelog
+    # corpus — closes the flow-doctor side of the changelog event-mining
+    # coverage gaps roadmap item).
+    bucket: Optional[str] = None
+    subsystem: Optional[str] = None
+    entry_prefix: str = "changelog/entries"
+    default_root_cause_category: str = "code_bug"
+    default_resolution_type: Optional[str] = None
 
 
 @dataclass
@@ -243,6 +251,11 @@ def _parse_notify_dicts(items: List[Dict]) -> List[NotifyChannelConfig]:
             repo=item.get("repo"),
             token=item.get("token"),
             labels=item.get("labels"),
+            bucket=item.get("bucket"),
+            subsystem=item.get("subsystem"),
+            entry_prefix=item.get("entry_prefix", "changelog/entries"),
+            default_root_cause_category=item.get("default_root_cause_category", "code_bug"),
+            default_resolution_type=item.get("default_resolution_type"),
         ))
     return configs
 
