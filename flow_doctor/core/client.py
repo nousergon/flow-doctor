@@ -43,6 +43,7 @@ _ENV_FALLBACKS: Dict[str, List[str]] = {
     "smtp_recipients": ["FLOW_DOCTOR_SMTP_RECIPIENTS", "EMAIL_RECIPIENTS"],
     "slack_webhook": ["FLOW_DOCTOR_SLACK_WEBHOOK", "SLACK_WEBHOOK_URL"],
     "anthropic_api_key": ["FLOW_DOCTOR_ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY"],
+    "s3_bucket": ["FLOW_DOCTOR_S3_BUCKET", "CHANGELOG_BUCKET"],
 }
 
 
@@ -223,10 +224,41 @@ class FlowDoctor:
                 labels = nc.labels or (config.github.labels if config.github else ["flow-doctor"])
                 notifiers.append(GitHubNotifier(repo=repo, token=token, labels=labels))
 
+            elif nc.type == "s3":
+                bucket = nc.bucket or _env_fallback("s3_bucket")
+                subsystem = nc.subsystem
+                missing = []
+                if not bucket:
+                    missing.append(
+                        f"bucket (or one of: {', '.join(_ENV_FALLBACKS['s3_bucket'])})"
+                    )
+                if not subsystem:
+                    missing.append(
+                        "subsystem (one of the alpha-engine-config/changelog/vocab.yaml "
+                        "subsystem values: retrieval, agents, predictor, executor, "
+                        "backtester, dashboard, research, infrastructure, prompts, "
+                        "eval, data_pipeline, telemetry)"
+                    )
+                if missing:
+                    raise ConfigError(
+                        f"{label}: s3 notifier is missing required field(s): "
+                        f"{'; '.join(missing)}. "
+                        f"The calling process's IAM principal must allow s3:PutObject "
+                        f"on the bucket's changelog/entries/* prefix."
+                    )
+                from flow_doctor.notify.s3 import S3Notifier
+                notifiers.append(S3Notifier(
+                    bucket=bucket,
+                    subsystem=subsystem,
+                    entry_prefix=nc.entry_prefix,
+                    default_root_cause_category=nc.default_root_cause_category,
+                    default_resolution_type=nc.default_resolution_type,
+                ))
+
             else:
                 raise ConfigError(
                     f"{label}: unknown notifier type '{nc.type}'. "
-                    f"Supported types: slack, email, github."
+                    f"Supported types: slack, email, github, s3."
                 )
 
         return notifiers
@@ -593,6 +625,7 @@ class FlowDoctor:
             from flow_doctor.notify.slack import SlackNotifier
             from flow_doctor.notify.email import EmailNotifier
             from flow_doctor.notify.github import GitHubNotifier
+            from flow_doctor.notify.s3 import S3Notifier
 
             if isinstance(notifier, SlackNotifier):
                 action_type = ActionType.SLACK_ALERT.value
@@ -600,6 +633,8 @@ class FlowDoctor:
                 action_type = ActionType.EMAIL_ALERT.value
             elif isinstance(notifier, GitHubNotifier):
                 action_type = ActionType.GITHUB_ISSUE.value
+            elif isinstance(notifier, S3Notifier):
+                action_type = ActionType.S3_ALERT.value
             else:
                 action_type = "unknown_alert"
 

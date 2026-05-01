@@ -29,6 +29,7 @@ class ActionType(str, Enum):
     EMAIL_ALERT = "email_alert"
     GITHUB_ISSUE = "github_issue"
     GITHUB_PR = "github_pr"
+    S3_ALERT = "s3_alert"
 
 
 class ActionStatus(str, Enum):
