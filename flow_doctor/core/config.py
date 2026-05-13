@@ -1,20 +1,40 @@
-"""Configuration: YAML file + inline Python kwargs."""
+"""Configuration: YAML file + inline Python kwargs.
+
+Backed by Pydantic v2 ``BaseModel`` (since v0.5.0) — field names + defaults
+match the prior ``@dataclass``-based shape, so callers constructing
+``FlowDoctorConfig(...)``, ``NotifyChannelConfig(...)``, etc. by keyword
+keep working unchanged. The benefit of the migration is type validation
+at construction time and a stable foundation for the typed builder API
+and the Pydantic ``BaseSettings`` env-var contract.
+"""
 
 from __future__ import annotations
 
 import os
 import re
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import yaml
+from pydantic import BaseModel, ConfigDict, Field
 
 from flow_doctor.core.errors import ConfigError
 
 
-@dataclass
-class NotifyChannelConfig:
+class _ConfigModel(BaseModel):
+    """Base for flow-doctor config models.
+
+    ``extra="ignore"`` matches the prior dataclass behaviour (unknown
+    keys in inline kwargs / yaml were silently dropped). ``validate_assignment``
+    is off so test/runtime code that mutates an attribute after construction
+    (e.g. ``cfg.market_hours_lockout = False``) keeps working the same way
+    it did with dataclasses.
+    """
+
+    model_config = ConfigDict(extra="ignore", validate_assignment=False)
+
+
+class NotifyChannelConfig(_ConfigModel):
     type: str  # "slack", "email", "github", or "s3"
     # Slack fields
     webhook_url: Optional[str] = None
@@ -39,16 +59,14 @@ class NotifyChannelConfig:
     default_resolution_type: Optional[str] = None
 
 
-@dataclass
-class StoreConfig:
+class StoreConfig(_ConfigModel):
     type: str = "sqlite"
     path: str = "flow_doctor.db"
     bucket: Optional[str] = None
     prefix: Optional[str] = None
 
 
-@dataclass
-class RateLimitConfig:
+class RateLimitConfig(_ConfigModel):
     max_diagnosed_per_day: int = 3
     max_issues_per_day: int = 3
     max_alerts_per_day: int = 5
@@ -57,8 +75,7 @@ class RateLimitConfig:
     dedup_cooldown_minutes: int = 60
 
 
-@dataclass
-class DiagnosisConfig:
+class DiagnosisConfig(_ConfigModel):
     enabled: bool = False
     provider: str = "anthropic"
     model: str = "claude-sonnet-4-6-20250514"
@@ -68,30 +85,26 @@ class DiagnosisConfig:
     max_daily_cost_usd: float = 1.00  # Hard cap on daily LLM spend
 
 
-@dataclass
-class GitHubConfig:
+class GitHubConfig(_ConfigModel):
     token: Optional[str] = None
-    labels: List[str] = field(default_factory=lambda: ["flow-doctor"])
+    labels: List[str] = Field(default_factory=lambda: ["flow-doctor"])
 
 
-@dataclass
-class ScopeConfig:
-    allow: List[str] = field(default_factory=list)
-    deny: List[str] = field(default_factory=list)
+class ScopeConfig(_ConfigModel):
+    allow: List[str] = Field(default_factory=list)
+    deny: List[str] = Field(default_factory=list)
 
 
-@dataclass
-class AutoFixConfig:
+class AutoFixConfig(_ConfigModel):
     enabled: bool = False
     confidence_threshold: float = 0.90
-    scope: ScopeConfig = field(default_factory=ScopeConfig)
+    scope: ScopeConfig = Field(default_factory=ScopeConfig)
     test_command: str = "python -m pytest tests/ -x -q"
     dry_run: bool = True
     model: Optional[str] = None
 
 
-@dataclass
-class RemediationConfig:
+class RemediationConfig(_ConfigModel):
     enabled: bool = False
     dry_run: bool = True  # Log actions without executing
     auto_remediate_min_confidence: float = 0.9
@@ -121,33 +134,31 @@ class RemediationConfig:
     # payment processors, medical software). Issue-filing still works
     # for these repos — only code modifications are blocked. Matches
     # GitHub-style "owner/name" or bare "name" (case-insensitive).
-    deny_repos: List[str] = field(default_factory=list)
+    deny_repos: List[str] = Field(default_factory=list)
 
 
-@dataclass
-class HandlerConfig:
+class HandlerConfig(_ConfigModel):
     level: str = "ERROR"
-    include_patterns: List[str] = field(default_factory=list)
-    exclude_patterns: List[str] = field(default_factory=list)
+    include_patterns: List[str] = Field(default_factory=list)
+    exclude_patterns: List[str] = Field(default_factory=list)
     queue_size: int = 100
 
 
-@dataclass
-class FlowDoctorConfig:
+class FlowDoctorConfig(_ConfigModel):
     flow_name: str = "default"
     repo: Optional[str] = None
     owner: Optional[str] = None
-    notify: List[NotifyChannelConfig] = field(default_factory=list)
-    store: StoreConfig = field(default_factory=StoreConfig)
-    rate_limits: RateLimitConfig = field(default_factory=RateLimitConfig)
-    dependencies: List[str] = field(default_factory=list)
+    notify: List[NotifyChannelConfig] = Field(default_factory=list)
+    store: StoreConfig = Field(default_factory=StoreConfig)
+    rate_limits: RateLimitConfig = Field(default_factory=RateLimitConfig)
+    dependencies: List[str] = Field(default_factory=list)
     dedup_cooldown_minutes: int = 60
-    diagnosis: DiagnosisConfig = field(default_factory=DiagnosisConfig)
-    github: GitHubConfig = field(default_factory=GitHubConfig)
-    auto_fix: AutoFixConfig = field(default_factory=AutoFixConfig)
-    remediation: RemediationConfig = field(default_factory=RemediationConfig)
+    diagnosis: DiagnosisConfig = Field(default_factory=DiagnosisConfig)
+    github: GitHubConfig = Field(default_factory=GitHubConfig)
+    auto_fix: AutoFixConfig = Field(default_factory=AutoFixConfig)
+    remediation: RemediationConfig = Field(default_factory=RemediationConfig)
     handler: Optional[HandlerConfig] = None
-    extra: Dict[str, Any] = field(default_factory=dict)
+    extra: Dict[str, Any] = Field(default_factory=dict)
 
 
 _ENV_VAR_RE = re.compile(r"\$\{([^}]+)\}")
@@ -309,6 +320,10 @@ def load_config(
             notify = _parse_notify_shorthand(notify_raw)
         elif notify_raw and isinstance(notify_raw[0], dict):
             notify = _parse_notify_dicts(notify_raw)
+        elif notify_raw and isinstance(notify_raw[0], NotifyChannelConfig):
+            # Inline kwargs may pass already-constructed NotifyChannelConfig
+            # instances (the builder does this); accept them verbatim.
+            notify = list(notify_raw)
         else:
             notify = []
     else:
@@ -319,21 +334,26 @@ def load_config(
 
     # Parse rate limits
     rl_raw = raw.get("rate_limits", {})
-    rate_limits = RateLimitConfig(
-        max_diagnosed_per_day=rl_raw.get("max_diagnosed_per_day", 3),
-        max_issues_per_day=rl_raw.get("max_issues_per_day", 3),
-        max_alerts_per_day=rl_raw.get("max_alerts_per_day", 5),
-        daily_digest=rl_raw.get("daily_digest", True),
-        digest_time=rl_raw.get("digest_time", "17:00"),
-        dedup_cooldown_minutes=rl_raw.get("dedup_cooldown_minutes",
-                                           raw.get("dedup_cooldown_minutes", 60)),
-    )
+    if isinstance(rl_raw, RateLimitConfig):
+        rate_limits = rl_raw
+    else:
+        rate_limits = RateLimitConfig(
+            max_diagnosed_per_day=rl_raw.get("max_diagnosed_per_day", 3),
+            max_issues_per_day=rl_raw.get("max_issues_per_day", 3),
+            max_alerts_per_day=rl_raw.get("max_alerts_per_day", 5),
+            daily_digest=rl_raw.get("daily_digest", True),
+            digest_time=rl_raw.get("digest_time", "17:00"),
+            dedup_cooldown_minutes=rl_raw.get("dedup_cooldown_minutes",
+                                               raw.get("dedup_cooldown_minutes", 60)),
+        )
 
     dedup_cooldown = raw.get("dedup_cooldown_minutes", rate_limits.dedup_cooldown_minutes)
 
     # Parse diagnosis config
     diag_raw = raw.get("diagnosis", {})
-    if isinstance(diag_raw, dict):
+    if isinstance(diag_raw, DiagnosisConfig):
+        diagnosis_config = diag_raw
+    elif isinstance(diag_raw, dict):
         diag_raw = _resolve_dict(diag_raw)
         diagnosis_config = DiagnosisConfig(
             enabled=diag_raw.get("enabled", False),
@@ -349,7 +369,9 @@ def load_config(
 
     # Parse github config
     gh_raw = raw.get("github", {})
-    if isinstance(gh_raw, dict):
+    if isinstance(gh_raw, GitHubConfig):
+        github_config = gh_raw
+    elif isinstance(gh_raw, dict):
         gh_raw = _resolve_dict(gh_raw)
         github_config = GitHubConfig(
             token=gh_raw.get("token"),
@@ -360,7 +382,9 @@ def load_config(
 
     # Parse auto_fix config
     af_raw = raw.get("auto_fix", {})
-    if isinstance(af_raw, dict):
+    if isinstance(af_raw, AutoFixConfig):
+        auto_fix_config = af_raw
+    elif isinstance(af_raw, dict):
         af_raw = _resolve_dict(af_raw)
         scope_raw = af_raw.get("scope", {})
         scope_config = ScopeConfig(
@@ -380,11 +404,13 @@ def load_config(
 
     # Parse remediation config
     rem_raw = raw.get("remediation", {})
-    if isinstance(rem_raw, dict):
+    if isinstance(rem_raw, RemediationConfig):
+        remediation_config = rem_raw
+    elif isinstance(rem_raw, dict):
         rem_raw = _resolve_dict(rem_raw)
-        # Defaults here match the RemediationConfig dataclass defaults
+        # Defaults here match the RemediationConfig model defaults
         # (not inlined) so there's one source of truth. If you change a
-        # default, change it in the dataclass at the top of this file.
+        # default, change it in the model at the top of this file.
         _defaults = RemediationConfig()
         deny_repos_raw = rem_raw.get("deny_repos", [])
         if isinstance(deny_repos_raw, str):
@@ -418,7 +444,9 @@ def load_config(
 
     # Parse handler config
     handler_raw = raw.get("handler")
-    if isinstance(handler_raw, dict):
+    if isinstance(handler_raw, HandlerConfig):
+        handler_config = handler_raw
+    elif isinstance(handler_raw, dict):
         handler_raw = _resolve_dict(handler_raw)
         handler_config = HandlerConfig(
             level=handler_raw.get("level", "ERROR"),

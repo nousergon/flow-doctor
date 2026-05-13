@@ -10,7 +10,10 @@ import sys
 import traceback as tb_module
 from contextlib import contextmanager
 from datetime import datetime
-from typing import Any, Callable, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
+
+if TYPE_CHECKING:
+    from flow_doctor.core.builder import FlowDoctorBuilder
 
 from flow_doctor.core.config import FlowDoctorConfig, load_config
 from flow_doctor.core.dedup import (
@@ -72,6 +75,34 @@ class _LogCaptureHandler(logging.Handler):
 
 class FlowDoctor:
     """Main Flow Doctor client."""
+
+    @classmethod
+    def builder(cls, flow_name: str) -> "FlowDoctorBuilder":
+        """Return a fluent builder for constructing a ``FlowDoctor``.
+
+        Preferred entry point for new code — typed, IDE-discoverable,
+        no yaml required. See :class:`flow_doctor.core.builder.FlowDoctorBuilder`
+        for the full API.
+
+        Example::
+
+            from flow_doctor import FlowDoctor
+            from flow_doctor.notify import EmailNotifierConfig
+
+            fd = (
+                FlowDoctor.builder("morning-signal")
+                .add_notifier(EmailNotifierConfig(
+                    sender="x@y.com",
+                    recipients=["x@y.com"],
+                    smtp_password=os.environ["GMAIL_APP_PASSWORD"],
+                ))
+                .with_dedup(cooldown_minutes=60)
+                .build()
+            )
+        """
+        from flow_doctor.core.builder import FlowDoctorBuilder
+
+        return FlowDoctorBuilder(flow_name)
 
     def __init__(self, config: FlowDoctorConfig, *, strict: bool = True):
         """Initialize a FlowDoctor instance.
@@ -347,6 +378,41 @@ class FlowDoctor:
             print(f"[flow-doctor] Internal error in report(): {exc}", file=sys.stderr)
             return None
 
+    async def report_async(
+        self,
+        error: Any = None,
+        *,
+        severity: str = Severity.ERROR.value,
+        context: Optional[Dict[str, Any]] = None,
+        logs: Optional[str] = None,
+        message: Optional[str] = None,
+    ) -> Optional[str]:
+        """Async counterpart of :meth:`report`.
+
+        Offloads the sync persist / notify / diagnosis work to a thread
+        so an async caller's event loop stays unblocked. The thread
+        inherits the current ``contextvars`` automatically (``asyncio.to_thread``
+        uses ``contextvars.copy_context()``), so any ``flow_doctor.context()``
+        scope active in the caller propagates to the recorded report.
+        """
+        import asyncio
+
+        try:
+            return await asyncio.to_thread(
+                self._do_report,
+                error,
+                severity=severity,
+                context=context,
+                logs=logs,
+                message=message,
+            )
+        except Exception as exc:
+            print(
+                f"[flow-doctor] Internal error in report_async(): {exc}",
+                file=sys.stderr,
+            )
+            return None
+
     def _do_report(
         self,
         error: Any,
@@ -456,6 +522,20 @@ class FlowDoctor:
             if key.startswith(("AWS_", "FLOW_", "PYTHON", "PATH", "HOME", "USER", "LANG")):
                 env_subset[key] = os.environ[key]
         ctx["environment"] = self._scrubber.scrub_env_vars(env_subset)
+
+        # Auto-pick contextvars stamped via flow_doctor.context(...).
+        # Inner scopes shadow outer ones; the keys land at the top level
+        # so downstream notifiers and digests can surface ``stage``
+        # without crawling into ``user``.
+        from flow_doctor.core._context import current_context as _current_context
+
+        ambient = _current_context()
+        if ambient:
+            # ``flow_name`` here overrides the static config value when the
+            # caller explicitly stamped a different flow_name — useful for
+            # multi-tenant pipelines that share a single FlowDoctor.
+            for k, v in ambient.items():
+                ctx[k] = v
 
         # User-supplied context
         if user_context:
