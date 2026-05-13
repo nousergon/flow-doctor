@@ -10,7 +10,10 @@ import sys
 import traceback as tb_module
 from contextlib import contextmanager
 from datetime import datetime
-from typing import Any, Callable, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
+
+if TYPE_CHECKING:
+    from flow_doctor.core.builder import FlowDoctorBuilder
 
 from flow_doctor.core.config import FlowDoctorConfig, load_config
 from flow_doctor.core.dedup import (
@@ -72,6 +75,34 @@ class _LogCaptureHandler(logging.Handler):
 
 class FlowDoctor:
     """Main Flow Doctor client."""
+
+    @classmethod
+    def builder(cls, flow_name: str) -> "FlowDoctorBuilder":
+        """Return a fluent builder for constructing a ``FlowDoctor``.
+
+        Preferred entry point for new code — typed, IDE-discoverable,
+        no yaml required. See :class:`flow_doctor.core.builder.FlowDoctorBuilder`
+        for the full API.
+
+        Example::
+
+            from flow_doctor import FlowDoctor
+            from flow_doctor.notify import EmailNotifierConfig
+
+            fd = (
+                FlowDoctor.builder("morning-signal")
+                .add_notifier(EmailNotifierConfig(
+                    sender="x@y.com",
+                    recipients=["x@y.com"],
+                    smtp_password=os.environ["GMAIL_APP_PASSWORD"],
+                ))
+                .with_dedup(cooldown_minutes=60)
+                .build()
+            )
+        """
+        from flow_doctor.core.builder import FlowDoctorBuilder
+
+        return FlowDoctorBuilder(flow_name)
 
     def __init__(self, config: FlowDoctorConfig, *, strict: bool = True):
         """Initialize a FlowDoctor instance.
