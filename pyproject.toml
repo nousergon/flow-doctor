@@ -50,6 +50,9 @@ Issues = "https://github.com/cipher813/flow-doctor/issues"
 [project.scripts]
 flow-doctor = "flow_doctor.fix.cli:main"
 
+[project.entry-points.pytest11]
+flow_doctor_testing = "flow_doctor.testing._plugin"
+
 [tool.setuptools.packages.find]
 include = ["flow_doctor*"]
 
