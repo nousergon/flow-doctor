@@ -33,3 +33,6 @@ tmp*.db
 
 # Local-only automation scripts (e.g. publish.sh) — not distributed with the package
 scripts/
+
+# Internal planning docs (not for public repo)
+private/
