@@ -1,0 +1,92 @@
+name: Publish to PyPI
+
+# Fires on a pushed tag matching v* (e.g. v0.5.0rc3, v0.5.0, v0.6.0).
+# Builds wheel + sdist, then publishes via PyPI's OIDC Trusted Publisher
+# integration — no API token lives in repo secrets. The PyPI side needs
+# a one-time Trusted Publisher entry registered at
+# https://pypi.org/manage/project/flow-doctor/settings/publishing/
+# (owner=cipher813, repo=flow-doctor, workflow=release.yml,
+#  environment=pypi).
+
+on:
+  push:
+    tags:
+      - 'v*'
+  # Manual fallback for re-publishing if a tag-push event was missed.
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Tag or branch to build"
+        required: true
+        default: "main"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build distribution
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # On a tag push, ref is the tag; on manual dispatch, use the
+          # supplied ref so re-publishes are explicit.
+          ref: ${{ github.event.inputs.ref || github.ref }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install build twine
+
+      - name: Build wheel + sdist
+        run: python -m build
+
+      - name: Verify metadata
+        run: python -m twine check dist/*
+
+      - name: Verify built version matches pushed tag
+        if: github.event_name == 'push'
+        run: |
+          # github.ref looks like refs/tags/v0.5.0rc2; strip the prefix
+          # and the leading v so it matches the project version.
+          tag_version="${GITHUB_REF#refs/tags/v}"
+          built_version=$(ls dist/*.whl | sed -E 's|.*flow_doctor-(.*)-py3.*|\1|')
+          if [ "$tag_version" != "$built_version" ]; then
+            echo "::error::Tag version ($tag_version) doesn't match built version ($built_version)."
+            echo "Bump version in flow_doctor/__init__.py + pyproject.toml before tagging."
+            exit 1
+          fi
+          echo "Tag $tag_version matches built $built_version"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    name: Publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    # GitHub environment with optional approval gate — keeps a deliberate
+    # human-in-the-loop step before any tag actually fires a PyPI release.
+    environment:
+      name: pypi
+      url: https://pypi.org/p/flow-doctor
+    # id-token: write is the OIDC requirement for Trusted Publishing.
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        # The action handles the OIDC token exchange + upload. No
+        # password / token field needed when Trusted Publisher is
+        # configured on the PyPI side.
