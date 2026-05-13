@@ -12,6 +12,8 @@ from contextlib import contextmanager
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
 
+from typing_extensions import deprecated
+
 if TYPE_CHECKING:
     from flow_doctor.core.builder import FlowDoctorBuilder
 
@@ -977,6 +979,10 @@ class FlowDoctor:
             return None
 
 
+@deprecated(
+    "flow_doctor.init() is deprecated; use FlowDoctor.builder() for typed, "
+    "IDE-discoverable configuration. The yaml shim will be removed in 0.6.0."
+)
 def init(
     config_path: Optional[str] = None,
     *,

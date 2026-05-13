@@ -27,6 +27,8 @@ classifiers = [
 dependencies = [
     "pyyaml>=6.0",
     "pydantic>=2.0",
+    # PEP 702 @deprecated backport for Python 3.9-3.12 (stdlib in 3.13+).
+    "typing_extensions>=4.5",
 ]
 
 [project.optional-dependencies]
@@ -56,5 +58,16 @@ flow_doctor_testing = "flow_doctor.testing._plugin"
 [tool.setuptools.packages.find]
 include = ["flow_doctor*"]
 
+[tool.setuptools.package-data]
+# Ship PEP 561 marker so mypy/pyright treat flow-doctor's annotations as
+# authoritative when consumers depend on flow-doctor in --strict mode.
+flow_doctor = ["py.typed"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+filterwarnings = [
+    # Our own tests exercise the legacy flow_doctor.init() path. Downstream
+    # consumers still see the DeprecationWarning at their call site; this
+    # filter only suppresses the noise inside our suite.
+    "ignore:flow_doctor.init.. is deprecated:DeprecationWarning",
+]

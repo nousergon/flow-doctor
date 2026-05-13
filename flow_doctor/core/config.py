@@ -17,6 +17,7 @@ from typing import Any, Dict, List, Optional
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field
+from typing_extensions import deprecated
 
 from flow_doctor.core.errors import ConfigError
 
@@ -34,6 +35,16 @@ class _ConfigModel(BaseModel):
     model_config = ConfigDict(extra="ignore", validate_assignment=False)
 
 
+@deprecated(
+    "NotifyChannelConfig is deprecated for direct use; construct a typed "
+    "SlackNotifierConfig / EmailNotifierConfig / GitHubNotifierConfig / "
+    "S3NotifierConfig from flow_doctor.notify instead. Will be removed in "
+    "0.6.0. (Static-only deprecation — no runtime DeprecationWarning is "
+    "emitted because the omnibus model is still the internal lingua franca "
+    "that the builder folds typed configs into; only consumers constructing "
+    "it explicitly trip the type-checker.)",
+    category=None,
+)
 class NotifyChannelConfig(_ConfigModel):
     type: str  # "slack", "email", "github", or "s3"
     # Slack fields
