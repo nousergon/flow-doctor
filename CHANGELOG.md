@@ -2,15 +2,22 @@
 
 ## Unreleased
 
-## 0.5.0 (2026-05-13)
+## 0.5.0rc1 (2026-05-13)
 
-The "plug-and-play" release. Three SOTA-target proposals from the
-plug-and-play planning doc (Pydantic v2 config, typed contract +
-testing plugin, ecosystem polish) land together. Existing 0.4.0
-consumers keep working unchanged — `flow_doctor.init(config_path=...)`
-is still supported through the 0.5.0 deprecation window. New consumers
-should adopt `FlowDoctor.builder(...)` for typed, IDE-discoverable
-configuration with no yaml required.
+Release-candidate cut of the "plug-and-play" release for internal soak.
+`pip install flow-doctor==0.5.0rc1` requires `--pre`, so this build
+won't accidentally land on consumers pinning `flow-doctor>=0.4` until
+0.5.0 final ships. The content below is the planned 0.5.0 changelog
+entry verbatim — 0.5.0 final will republish it once the rcN cycle
+clears soak.
+
+Three SOTA-target proposals from the plug-and-play planning doc
+(Pydantic v2 config, typed contract + testing plugin, ecosystem polish)
+land together. Existing 0.4.0 consumers keep working unchanged —
+`flow_doctor.init(config_path=...)` is still supported through the
+0.5.0 deprecation window. New consumers should adopt
+`FlowDoctor.builder(...)` for typed, IDE-discoverable configuration
+with no yaml required.
 
 ### Added
 
