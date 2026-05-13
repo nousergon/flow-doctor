@@ -2,118 +2,231 @@
 
 [![Python](https://img.shields.io/badge/python-3.9+-blue.svg)]()
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-243_passing-brightgreen.svg)]()
-[![Coverage](https://img.shields.io/badge/coverage-81%25-brightgreen.svg)]()
-[![PyPI](https://img.shields.io/badge/PyPI-v0.2.0-blue.svg)](https://pypi.org/project/flow-doctor/)
+[![Tests](https://img.shields.io/badge/tests-376_passing-brightgreen.svg)]()
+[![PyPI](https://img.shields.io/badge/PyPI-v0.5.0rc2-blue.svg)](https://pypi.org/project/flow-doctor/)
+[![Typed](https://img.shields.io/badge/typed-PEP_561-blue.svg)]()
 
-Pipeline error handler for Python. Captures exceptions, diagnoses root causes with LLMs, files GitHub issues, and generates fix PRs.
+Pipeline error handler for Python. Captures exceptions, deduplicates failure signatures, optionally diagnoses root causes with LLMs, routes alerts (Telegram / Slack / email / GitHub / S3 / custom), and can generate fix PRs.
 
-**Fail-loud by default (v0.2.0+).** Configuration errors — missing tokens, unresolved `${VAR}` references, misconfigured notifiers — raise `ConfigError` at `init()` time instead of silently degrading. Silent degradation means users discover broken error monitoring only during an actual incident, which defeats the purpose.
+**Typed, IDE-discoverable configuration.** Pydantic v2 models + a fluent `FlowDoctor.builder()` mean you don't need a yaml file — and when you have one, the schema is enforced at load time.
+
+**Fail-loud by default.** Configuration errors — missing tokens, unresolved `${VAR}` references, misconfigured notifiers — raise `ConfigError` at construction time instead of silently degrading. A silently-degraded error monitor defeats the purpose.
 
 ```python
-import logging
-import flow_doctor
+from flow_doctor import FlowDoctor, TelegramNotifierConfig
 
-# Zero config file: read everything from FLOW_DOCTOR_* env vars
-fd = flow_doctor.init()
+fd = (
+    FlowDoctor.builder("morning-signal")
+    .add_notifier(TelegramNotifierConfig())  # creds from FLOW_DOCTOR_TELEGRAM_*
+    .with_dedup(cooldown_minutes=60)
+    .build()
+)
 
-handler = flow_doctor.FlowDoctorHandler(fd, level=logging.WARNING)
-logging.getLogger().addHandler(handler)
-
-# Every WARNING+ log is now captured, deduplicated, diagnosed, and routed.
+with fd.guard():
+    run_pipeline()  # exceptions captured, deduplicated, routed, re-raised
 ```
 
 ## How It Works
 
 ```
-Exception → Capture → Dedup → Diagnose (LLM) → GitHub Issue → Fix PR
+Exception → Capture → Dedup → Diagnose (LLM, opt) → Notify (Telegram/...) → Fix PR (opt)
 ```
 
-1. **Capture** — exception, traceback, logs, and runtime context
-2. **Dedup** — same error signature within cooldown window is suppressed
+1. **Capture** — exception, traceback, logs, contextvars (`flow_name`, `stage`)
+2. **Dedup** — same error signature within cooldown window is suppressed (normalized to ignore reqIds, UUIDs, contract symbols, etc.)
 3. **Cascade** — if a declared upstream dependency also failed, tag it and skip diagnosis
-4. **Diagnose** — check the knowledge base (free), then call Claude if rate limit allows
-5. **Notify** — file a GitHub issue, send Slack/email (rate-limited with daily digest fallback)
-6. **Fix** — human adds `flow-doctor:fix` label on the issue, triggering automated fix PR generation
+4. **Diagnose** *(opt)* — check the knowledge base (free), then call Claude if rate limit allows
+5. **Notify** — Telegram / Slack / email / GitHub issue / S3 changelog (rate-limited with daily digest fallback)
+6. **Fix** *(opt)* — human adds `flow-doctor:fix` label on a filed issue, triggering automated fix PR generation
 
 ## Installation
 
+While 0.5.0 is in the rc cycle:
+
 ```bash
-pip install flow-doctor                          # core only
-pip install "flow-doctor[diagnosis]"             # + LLM diagnosis (anthropic SDK)
-pip install "flow-doctor[diagnosis,remediation]" # + auto-remediation (boto3 for SSM/Step Functions)
-pip install "flow-doctor[all]"                   # everything
+pip install --pre flow-doctor                          # core only
+pip install --pre "flow-doctor[diagnosis]"             # + LLM diagnosis (anthropic SDK)
+pip install --pre "flow-doctor[diagnosis,remediation]" # + auto-remediation (boto3)
+pip install --pre "flow-doctor[all]"                   # everything
 ```
 
-## Quick Start
+The `--pre` flag is required while the version tag has an `rc` suffix; drop it once 0.5.0 final ships. Pinning `flow-doctor==0.5.0rc2` works regardless.
 
-### Option 1: Logging handler (recommended)
+## Quick Start — `FlowDoctor.builder()` (recommended)
 
-Attach to Python's logging system. Zero changes at call sites — any `WARNING+` log triggers the full pipeline.
+The builder is typed, IDE-discoverable, and works without a yaml file. Notifier credentials fall through to `FLOW_DOCTOR_*` env vars when not passed inline.
 
 ```python
-import logging
-import flow_doctor
+from flow_doctor import FlowDoctor, TelegramNotifierConfig
 
-fd = flow_doctor.init(config_path="flow-doctor.yaml")
-handler = flow_doctor.FlowDoctorHandler(fd, level=logging.WARNING)
-logging.getLogger().addHandler(handler)
-
-# These now trigger dedup, diagnosis, and notifications automatically:
-logger.warning("Upstream data is 48h stale")
-logger.error("S3 backup failed: AccessDenied")
-logger.exception("Pipeline crashed")
+fd = (
+    FlowDoctor.builder("morning-signal")
+    .add_notifier(TelegramNotifierConfig())  # bot_token + chat_id from env
+    .with_dedup(cooldown_minutes=60)
+    .build()
+)
 ```
 
-The handler is **non-blocking** — `emit()` enqueues work and returns immediately. A background thread calls `fd.report()` asynchronously.
-
-### Option 2: Direct reporting
+Three idiomatic ways to use the resulting `FlowDoctor` in your pipeline:
 
 ```python
-fd = flow_doctor.init(config_path="flow-doctor.yaml")
+# 1. Context manager — exception is captured + re-raised
+with fd.guard():
+    run_pipeline()
 
+# 2. Decorator
+@fd.monitor
+def lambda_handler(event, context):
+    run_pipeline()
+
+# 3. Direct reporting — never crashes the caller
 try:
     run_pipeline()
 except Exception as e:
-    fd.report(e)  # never crashes the caller
+    fd.report(e, context={"date": "2026-05-13"})
 ```
 
-### Option 3: Context manager / decorator
+Async pipelines:
 
 ```python
-with fd.guard():
-    run_pipeline()  # exceptions are reported and re-raised
-
-@fd.monitor
-def handler(event, context):
-    run_pipeline()
+async def run():
+    try:
+        await pipeline()
+    except Exception as exc:
+        await fd.report_async(exc)
 ```
 
-### Log capture
-
-Attach recent logs to the next error report for richer diagnosis context:
+**Contextvars propagate automatically.** Stamp `flow_name` / `stage` once and any `fd.report()` inside picks them up — no need to thread `context=...` through every layer:
 
 ```python
-with fd.capture_logs(level=logging.INFO):
-    logger.info("Starting scan with 900 tickers...")
-    run_pipeline()
-    # All captured logs are attached to the next fd.report() call
+import flow_doctor
+
+with flow_doctor.context(flow_name="morning-signal", stage="rank"):
+    run_rank()  # any fd.report() inside auto-records flow_name + stage
+```
+
+## Notifier configs (typed)
+
+Five first-class notifiers ship today, each with its own Pydantic config exposed via the discriminated union `NotifierConfig`:
+
+| Config | Channel | Setup |
+|---|---|---|
+| `TelegramNotifierConfig` | Telegram Bot API | `@BotFather` → `/newbot` → bot token + `chat_id`. **Recommended default.** |
+| `SlackNotifierConfig` | Slack incoming webhook | Slack app → incoming webhook URL |
+| `EmailNotifierConfig` | SMTP (Gmail / any) | sender + recipients + SMTP password (Gmail App Password works) |
+| `GitHubNotifierConfig` | GitHub issues | PAT with `Issues: write` on the target repo |
+| `S3NotifierConfig` | System-wide changelog corpus | Bucket + subsystem; IAM allows `s3:PutObject` on the prefix |
+
+Mix freely:
+
+```python
+from flow_doctor import (
+    EmailNotifierConfig,
+    FlowDoctor,
+    GitHubNotifierConfig,
+    TelegramNotifierConfig,
+)
+
+fd = (
+    FlowDoctor.builder("alpha-engine-predictor")
+    .add_notifier(TelegramNotifierConfig(message_thread_id=42))   # forum topic
+    .add_notifier(GitHubNotifierConfig(repo="me/alpha-engine"))   # token from env
+    .add_notifier(EmailNotifierConfig(sender="me@x.com",
+                                       recipients=["me@x.com"]))
+    .build()
+)
+```
+
+### Telegram — recommended default
+
+Why Telegram leads the examples:
+- **Two-minute setup.** Message `@BotFather` → `/newbot` → save the token. Then DM your bot, then `GET https://api.telegram.org/bot<TOKEN>/getUpdates` and grab `result[0].message.chat.id`.
+- **Per-flow routing for free.** One bot, N channels via `chat_id`, or N forum-topic threads via `message_thread_id` in a supergroup.
+- **Mobile push is automatic.** No "did the email go to spam" mystery.
+- **Token rotation is one `@BotFather` call.** No app password / SES verified identity / Slack workspace admin.
+
+```bash
+export FLOW_DOCTOR_TELEGRAM_BOT_TOKEN=1234567890:ABC...
+export FLOW_DOCTOR_TELEGRAM_CHAT_ID=-1001234567890  # negative for supergroups/channels
+```
+
+```python
+FlowDoctor.builder("pipeline").add_notifier(TelegramNotifierConfig()).build()
+```
+
+## Testing — `flow_doctor.testing` pytest plugin
+
+The plugin is auto-discovered (registered via `[project.entry-points.pytest11]`). Downstream tests get a `flow_doctor_recorder` fixture with **no imports required**.
+
+```python
+def test_pipeline_reports_db_errors(flow_doctor_recorder):
+    run_pipeline_that_should_fail(flow_doctor_recorder)
+    assert len(flow_doctor_recorder.reports) == 1
+    assert flow_doctor_recorder.last.exc_type == "DBError"
+    assert flow_doctor_recorder.last.ambient_context["stage"] == "ingest"
+```
+
+`flow_doctor_recorder` is a `RecordingFlowDoctor` — it implements `FlowDoctorProtocol`, so wherever production code expects a `FlowDoctorProtocol` you can swap it in directly. It also snapshots any active `flow_doctor.context()` scope onto each captured incident's `ambient_context` field.
+
+Helpers on the recorder: `.clear()`, `.last`, `.of_type(exc_name)`, plus full async support via `await recorder.report_async(...)`.
+
+## Type-checked contract — `FlowDoctorProtocol`
+
+```python
+from flow_doctor import FlowDoctorProtocol
+
+def make_pipeline(fd: FlowDoctorProtocol):
+    with fd.guard():
+        ...
+```
+
+`@runtime_checkable`, so `isinstance(fd, FlowDoctorProtocol)` works at runtime as well as at type-check time. Combined with the shipped `py.typed` marker, `mypy --strict` and pyright treat flow-doctor's annotations as authoritative.
+
+## OpenTelemetry — `flow_doctor.otel`
+
+Pure-Python adapter that serializes a `Report` into an OTel `SpanEvent`-shaped dict — ready to ship to a collector via your existing OTLP exporter today. No `opentelemetry-*` dependency in this release; the bundled OTLP exporter notifier is on the 0.6.0 roadmap.
+
+```python
+from flow_doctor.otel import report_to_otel_span_event
+
+span_event = report_to_otel_span_event(report)
+# {
+#   "resource": {"service.name": "<flow_name>"},
+#   "name": "<stage>",
+#   "time_unix_nano": ...,
+#   "severity_text": "ERROR", "severity_number": 17,
+#   "attributes": {
+#     "exception.type": "ValueError",
+#     "exception.message": "...",
+#     "exception.stacktrace": "...",
+#     "flow_doctor.error_signature": "...",
+#     "context.run_id": "...",
+#   },
+# }
 ```
 
 ## Configuration
 
-Create a `flow-doctor.yaml` in your project root:
+### Inline kwargs / builder (recommended)
+
+See the Quick Start. No yaml required.
+
+### YAML file (legacy / multi-environment)
 
 ```yaml
 flow_name: my-pipeline
 repo: owner/repo
 
 notify:
+  - type: telegram
+    bot_token: ${FLOW_DOCTOR_TELEGRAM_BOT_TOKEN}
+    chat_id: -1001234567890
+    message_thread_id: 42      # optional: forum-topic routing
   - type: github
     repo: owner/repo
-  - type: email
-    sender: alerts@example.com
-    recipients: oncall@example.com
+  - type: s3
+    bucket: my-changelog-bucket
+    subsystem: predictor       # one of the documented vocab values
 
 store:
   type: sqlite
@@ -142,7 +255,6 @@ remediation:
   enabled: true
   dry_run: true
   auto_remediate_min_confidence: 0.9
-  market_hours_lockout: false
 
 auto_fix:
   enabled: true
@@ -153,98 +265,124 @@ auto_fix:
     deny: ["*.yaml", "*.yml"]
 ```
 
-Environment variables in `${VAR}` syntax are resolved at load time. **Unresolved references raise `ConfigError`** — no silent passthrough where `${MISSING_VAR}` ends up being used as a literal token.
-
-Inline configuration (no YAML file):
-
 ```python
-fd = flow_doctor.init(
-    flow_name="my-pipeline",
-    repo="owner/repo",
-    store={"type": "sqlite", "path": "flow_doctor.db"},
-    notify=["github:owner/repo"],
-)
+# Deprecated since 0.5.0; will be removed in 0.6.0. Use FlowDoctor.builder() instead.
+fd = flow_doctor.init(config_path="flow-doctor.yaml")
 ```
+
+`${VAR}` references resolve from the process environment at load time. **Unresolved references raise `ConfigError`** — no silent passthrough.
 
 ## Environment Variables
 
-flow-doctor reads credentials from environment variables as its primary configuration mechanism. Every notifier has a documented fallback chain: config → `FLOW_DOCTOR_*` canonical name → common conventions. This lets the same code work across `export`-in-shell, systemd `EnvironmentFile=`, Docker `--env`, Kubernetes Secrets, CI runners, Render/Fly.io/Heroku, and everything else, without touching a file.
+flow-doctor reads credentials from environment variables as its primary configuration mechanism. Every notifier has a documented fallback chain: explicit value → `FLOW_DOCTOR_*` canonical name → common conventions.
 
 ### Canonical contract
 
 | Variable | Used by | Fallback chain | Required when |
 |---|---|---|---|
+| `FLOW_DOCTOR_TELEGRAM_BOT_TOKEN` | Telegram notifier | `FLOW_DOCTOR_TELEGRAM_BOT_TOKEN` → `TELEGRAM_BOT_TOKEN` | Telegram notifier config has no explicit `bot_token` field |
+| `FLOW_DOCTOR_TELEGRAM_CHAT_ID` | Telegram notifier | `FLOW_DOCTOR_TELEGRAM_CHAT_ID` → `TELEGRAM_CHAT_ID` | Telegram notifier config has no explicit `chat_id` field |
 | `FLOW_DOCTOR_GITHUB_TOKEN` | GitHub notifier, auto-fix PR creator | `FLOW_DOCTOR_GITHUB_TOKEN` → `GH_TOKEN` → `GITHUB_TOKEN` | Any GitHub notifier or auto-fix is configured |
 | `FLOW_DOCTOR_GITHUB_REPO` | GitHub notifier | `FLOW_DOCTOR_GITHUB_REPO` | GitHub notifier config has no explicit `repo` field |
 | `FLOW_DOCTOR_SMTP_PASSWORD` | Email notifier | `FLOW_DOCTOR_SMTP_PASSWORD` → `GMAIL_APP_PASSWORD` | SMTP requires auth |
 | `FLOW_DOCTOR_SMTP_SENDER` | Email notifier | `FLOW_DOCTOR_SMTP_SENDER` → `EMAIL_SENDER` | Email notifier config has no explicit `sender` field |
 | `FLOW_DOCTOR_SMTP_RECIPIENTS` | Email notifier | `FLOW_DOCTOR_SMTP_RECIPIENTS` → `EMAIL_RECIPIENTS` | Email notifier config has no explicit `recipients` field |
 | `FLOW_DOCTOR_SLACK_WEBHOOK` | Slack notifier | `FLOW_DOCTOR_SLACK_WEBHOOK` → `SLACK_WEBHOOK_URL` | Slack notifier config has no explicit `webhook_url` field |
+| `FLOW_DOCTOR_S3_BUCKET` | S3 notifier | `FLOW_DOCTOR_S3_BUCKET` → `CHANGELOG_BUCKET` | S3 notifier config has no explicit `bucket` field |
 | `FLOW_DOCTOR_ANTHROPIC_API_KEY` | LLM diagnosis, auto-fix generator | `FLOW_DOCTOR_ANTHROPIC_API_KEY` → `ANTHROPIC_API_KEY` | `diagnosis.enabled: true` or auto-fix is on |
+| `FLOW_DOCTOR_SKIP_PREFLIGHT` | All notifiers' `validate()` | (literal) | Set to `1` in tests / offline boot to bypass token/preflight network calls |
 
-**Precedence** for every field is: explicit value in YAML/kwargs → canonical `FLOW_DOCTOR_*` env var → convention fallbacks in the order listed. The first non-empty value wins. Missing values raise `ConfigError` at `init()` time naming the specific field and the env vars that would satisfy it.
+**Precedence** for every field is: explicit value in kwargs/yaml → canonical `FLOW_DOCTOR_*` env var → convention fallbacks in the order listed. The first non-empty value wins. Missing values raise `ConfigError` at construction time naming the specific field and the env vars that would satisfy it.
 
-### Env-var-only quickstart
+### Env-var-only quickstart — Telegram
 
-For the minimum possible setup, create a GitHub PAT with `Issues: Read and write`, then:
+Two env vars, two lines of Python, working alerts on the next exception:
 
 ```bash
-export FLOW_DOCTOR_GITHUB_REPO=myorg/myrepo
-export FLOW_DOCTOR_GITHUB_TOKEN=github_pat_...
+export FLOW_DOCTOR_TELEGRAM_BOT_TOKEN=1234567890:ABC...
+export FLOW_DOCTOR_TELEGRAM_CHAT_ID=-1001234567890
 ```
 
 ```python
-import flow_doctor
+from flow_doctor import FlowDoctor, TelegramNotifierConfig
 
-fd = flow_doctor.init(
-    flow_name="my-pipeline",
-    notify=[{"type": "github"}],
-)
-
-try:
-    risky_thing()
-except Exception as e:
-    fd.report(e)
+fd = FlowDoctor.builder("pipeline").add_notifier(TelegramNotifierConfig()).build()
 ```
-
-Two env vars, four lines of Python, working GitHub issues on the next exception. No YAML file required. The GitHub notifier's `repo` and `token` both resolve from the env.
 
 ### Strict mode and degraded mode
 
-`flow_doctor.init()` defaults to `strict=True`. Any configuration error (missing required field, unresolved `${VAR}`, unknown notifier type) raises `ConfigError` and prevents startup. This is the recommended default — a non-running flow-doctor is a loud failure; a silently-degraded flow-doctor is a silent one.
+`FlowDoctor.builder().build()` and `flow_doctor.init()` both default to `strict=True`. Any configuration error (missing required field, unresolved `${VAR}`, unknown notifier type) raises `ConfigError` and prevents startup. This is the recommended default — a non-running flow-doctor is a loud failure; a silently-degraded flow-doctor is a silent one.
 
 If you genuinely want best-effort init that logs errors but keeps running with no notifiers, opt in explicitly:
 
 ```python
-fd = flow_doctor.init(strict=False)  # degraded mode — use with caution
+fd = FlowDoctor.builder("pipeline").build(strict=False)
+```
+
+## Logging-handler integration
+
+Attach to Python's logging system if you want every `WARNING+` log to flow through dedup + diagnosis + notify without touching call sites:
+
+```python
+import logging
+import flow_doctor
+
+fd = flow_doctor.FlowDoctor.builder("pipeline").add_notifier(
+    flow_doctor.TelegramNotifierConfig()
+).build()
+
+handler = fd.get_handler(level=logging.WARNING)
+logging.getLogger().addHandler(handler)
+
+logger.warning("Upstream data is 48h stale")  # → captured + routed
+logger.error("S3 backup failed: AccessDenied")
+logger.exception("Pipeline crashed")
+```
+
+The handler is **non-blocking** — `emit()` enqueues work and returns immediately; a background thread calls `fd.report()` asynchronously.
+
+### Log capture
+
+Attach recent logs to the next error report for richer diagnosis context:
+
+```python
+with fd.capture_logs(level=logging.INFO):
+    logger.info("Starting scan with 900 tickers...")
+    run_pipeline()
+    # All captured logs are attached to the next fd.report() call
 ```
 
 ## Features
 
-### Error Capture and Dedup
+### Error capture and dedup
 
 - Traceback extraction with frame-based signature hashing
-- Configurable cooldown window (default 60 min) — same error is captured once, not spammed
+- Configurable cooldown window (default 60 min) — same error captured once, not spammed
+- Variable-token normalization: reqIds, conIds, contract symbols, UUIDs, AWS request IDs are stripped before hashing, so a library logging the same error against N objects collapses to one signature
 - Cascade detection tags downstream failures caused by upstream dependency outages
 - Automatic secret scrubbing (AWS keys, Bearer tokens, passwords in URLs)
 
-### LLM Diagnosis
+### LLM diagnosis
 
 - Structured root cause analysis via Claude: category, confidence, affected files, remediation
 - Six categories: `TRANSIENT`, `DATA`, `CODE`, `CONFIG`, `EXTERNAL`, `INFRA`
-- Knowledge base caching — known patterns are matched for free before calling the LLM
+- Knowledge base caching — known patterns matched for free before calling the LLM
 - Git context assembly (recent commits, changed files) for better diagnosis accuracy
 - Daily cost cap (default $1.00) and rate limiting (default 3 diagnoses/day)
 
-### GitHub Issues
+### Notifications
 
-- Auto-filed with diagnosis, traceback, and captured logs
-- Machine-readable metadata embedded in HTML comments for downstream automation
-- Rate-limited with graceful degradation to daily digest
+- **Telegram** — Bot API, per-chat / per-thread routing, mobile push (recommended default)
+- **Slack** — webhook-based alerts with severity emoji + diagnosis snippet
+- **Email** — SMTP (Gmail/any) with detailed body
+- **GitHub issues** — auto-filed with diagnosis, traceback, captured logs, machine-readable metadata
+- **S3** — writes schema-1.0.0 entries to a system-wide changelog corpus
+- **Daily digest** — summarizes rate-limited / suppressed errors at end of day
+- **Custom notifiers** — subclass `flow_doctor.notify.base.Notifier`; the abstract base is a public extension point
 
 ### Auto-Fix PRs
 
-Human-in-the-loop: a human reviews the diagnosis, adds a `flow-doctor:fix` label, and a GitHub Actions workflow generates a validated fix PR.
+Human-in-the-loop: a human reviews a filed issue's diagnosis, adds a `flow-doctor:fix` label, and a GitHub Actions workflow generates a validated fix PR.
 
 1. An error occurs and Flow Doctor creates a GitHub issue with structured diagnosis
 2. A human reviews the diagnosis and adds the `flow-doctor:fix` label
@@ -259,12 +397,14 @@ Human-in-the-loop: a human reviews the diagnosis, adds a `flow-doctor:fix` label
 - Generated diff touches files outside configured scope
 - Tests fail after applying the fix
 
-### Remediation Playbooks
+### Remediation playbooks
 
 Define patterns that map failure signatures to automated actions:
 
 ```python
-from flow_doctor.remediation.playbook import Playbook, PlaybookPattern, RemediationAction, RemediationType
+from flow_doctor.remediation.playbook import (
+    Playbook, PlaybookPattern, RemediationAction, RemediationType,
+)
 
 my_playbook = Playbook(patterns=[
     PlaybookPattern(
@@ -281,13 +421,6 @@ my_playbook = Playbook(patterns=[
     ),
 ])
 ```
-
-### Notifications
-
-- **GitHub issues** — primary notification with full diagnosis
-- **Slack** — webhook-based alerts with severity emoji and diagnosis snippet
-- **Email** — SMTP with detailed body (traceback, diagnosis, affected files)
-- **Daily digest** — summarizes rate-limited/suppressed errors at end of day
 
 ## Auto-Fix CLI
 
@@ -315,8 +448,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
-      - run: pip install flow-doctor[diagnosis]
+          python-version: '3.12'
+      - run: pip install --pre "flow-doctor[diagnosis]"
       - run: |
           python -m flow_doctor.fix.cli generate-fix \
             --issue-number ${{ github.event.issue.number }} \
@@ -327,17 +460,41 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 ```
 
+## Migrating from 0.4.x
+
+`flow_doctor.init(config_path=...)` and direct construction of `NotifyChannelConfig` are both `@deprecated` (PEP 702) in 0.5.0. Both still work — they'll be removed in 0.6.0. Migration:
+
+```python
+# 0.4.x — still works in 0.5.x, but mypy/pyright will flag it
+fd = flow_doctor.init(config_path="flow-doctor.yaml")
+
+# 0.5.x — typed, IDE-discoverable, no yaml
+fd = (
+    FlowDoctor.builder("pipeline")
+    .add_notifier(TelegramNotifierConfig())
+    .build()
+)
+```
+
+The 0.5.x yaml shim is API-compatible with 0.4.x configs; existing yaml files keep working through the deprecation window.
+
 ## Architecture
 
 ```
 flow_doctor/
-  core/           # Client, config, models, dedup, rate limiting, scrubber, logging handler
+  core/           # Client, builder, config (Pydantic v2), models, dedup,
+                  # rate limiting, scrubber, logging handler, contextvars
+  _protocol.py    # FlowDoctorProtocol public contract
+  notify/         # Telegram, Slack, Email, GitHub, S3 — concrete notifiers
+                  # + typed Pydantic config models (discriminated union)
   diagnosis/      # LLM provider, context assembly, knowledge base, git context
   digest/         # Daily digest generator
   fix/            # Auto-fix: LLM generator, scope guard, test validator, PR creator, CLI
-  notify/         # Slack, email, GitHub issue backends
   remediation/    # Decision gate, executor, playbook patterns
   storage/        # SQLite backend (thread-safe, per-thread connections)
+  testing/        # RecordingFlowDoctor + pytest plugin (auto-discovered)
+  otel.py         # Report → OTel SpanEvent serialization adapter
+  py.typed        # PEP 561 marker — annotations are authoritative for mypy/pyright
 ```
 
 ## Development
@@ -346,11 +503,11 @@ flow_doctor/
 git clone https://github.com/cipher813/flow-doctor.git
 cd flow-doctor
 python -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]"
+pip install -e ".[dev,diagnosis]"
 
-python -m pytest tests/ -x -q        # 212 tests
-python -m pytest tests/ --cov=flow_doctor  # coverage report
-python examples/smoke_test.py         # end-to-end smoke test
+python -m pytest tests/ -x -q             # 376 tests
+python -m pytest tests/ --cov=flow_doctor # coverage report
+python examples/smoke_test.py              # end-to-end smoke test
 ```
 
 ## License
