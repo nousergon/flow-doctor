@@ -142,6 +142,21 @@ class RemediationConfig(_ConfigModel):
     max_auto_remediations_per_day: int = 2
     max_auto_remediations_per_failure: int = 2
     market_hours_lockout: bool = True
+    # Telegram routing for remediation auto-action pings. Preferred
+    # path since 0.5.0rc3 — the executor will build a real
+    # ``TelegramNotifier`` from these fields and route every remediation
+    # action's success / failure through it, picking up bot-token /
+    # chat-id / threading / Markdown rendering / target-id audit for
+    # free. Leave unset to skip Telegram notification entirely.
+    telegram_bot_token: Optional[str] = None
+    telegram_chat_id: Optional[Union[int, str]] = None
+    telegram_message_thread_id: Optional[int] = None
+    # Legacy webhook URL — kept for back-compat with 0.4.x configs.
+    # Was a misnomer (Telegram doesn't have user-installable webhooks
+    # the way Slack does), and the executor's bespoke POST format
+    # didn't compose with the rest of the notifier surface. New
+    # consumers should use ``telegram_bot_token`` + ``telegram_chat_id``
+    # above; this field will be removed in 0.6.0.
     telegram_webhook_url: Optional[str] = None
     s3_audit_bucket: Optional[str] = None
     s3_audit_prefix: str = "flow-doctor/audit"
@@ -456,6 +471,9 @@ def load_config(
                             _defaults.max_auto_remediations_per_failure)),
             market_hours_lockout=rem_raw.get(
                 "market_hours_lockout", _defaults.market_hours_lockout),
+            telegram_bot_token=rem_raw.get("telegram_bot_token"),
+            telegram_chat_id=rem_raw.get("telegram_chat_id"),
+            telegram_message_thread_id=rem_raw.get("telegram_message_thread_id"),
             telegram_webhook_url=rem_raw.get("telegram_webhook_url"),
             s3_audit_bucket=rem_raw.get("s3_audit_bucket"),
             s3_audit_prefix=rem_raw.get(

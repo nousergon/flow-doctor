@@ -2,6 +2,62 @@
 
 ## Unreleased
 
+## 0.5.0rc3 (2026-05-13)
+
+Cleanup pass before the morning-signal cutover.
+
+### Added
+
+- **`TelegramNotifier.send_raw(text, *, parse_mode=, disable_notification=)`** —
+  adjacent flow-doctor subsystems can now POST arbitrary text through
+  the same bot + chat + thread + Markdown routing the structured
+  `send()` path uses, without conforming to the `Report` shape.
+  Returns the standard non-secret `"telegram:<chat_id>[:<thread>]"`
+  target identifier (or `None` on failure — never raises).
+  ``parse_mode=None`` / ``disable_notification=False`` are honoured as
+  explicit overrides via a sentinel default; pass nothing to inherit
+  the instance defaults.
+- **`RemediationConfig.telegram_bot_token` + `telegram_chat_id` +
+  `telegram_message_thread_id`** — first-class Telegram fields for the
+  remediation pipeline. `_init_remediation` builds a real
+  `TelegramNotifier` from these (with the `FLOW_DOCTOR_TELEGRAM_*`
+  env-var fallback chain) and hands it to `RemediationExecutor`.
+
+### Changed
+
+- **`RemediationExecutor`** now accepts a `telegram_notifier:
+  TelegramNotifier | None` kwarg in addition to the legacy
+  `telegram_webhook_url`. When both are supplied, the notifier wins.
+  Remediation pings going through it pick up Markdown rendering,
+  threading, target-id audit (`actions.target` row), and the same
+  `validate()` preflight as the rest of the notifier surface.
+- `examples/smoke_test.py` rewritten to lead with
+  `FlowDoctor.builder()` + `TelegramNotifierConfig` (instead of the
+  now-`@deprecated` `flow_doctor.init()`). Adds smoke checks for
+  `flow_doctor.context()` propagation, `report_async()` from an
+  asyncio context, and `flow_doctor.otel.report_to_otel_span_event`
+  serialization. All offline (FLOW_DOCTOR_SKIP_PREFLIGHT=1 + fake
+  creds + sqlite at temp path).
+- `[tool.coverage.run]` section added to `pyproject.toml`. Use the
+  canonical `python -m coverage run -m pytest && python -m coverage
+  report` instead of `pytest --cov=` — the latter misreports
+  module-level statement coverage under editable installs because
+  pytest-cov instruments after the import has already happened.
+
+### Deprecated
+
+- **`RemediationConfig.telegram_webhook_url`** is now soft-deprecated.
+  Kept for 0.4.x yaml back-compat through the 0.5.x series; consumers
+  should migrate to `telegram_bot_token` + `telegram_chat_id` (with
+  optional `telegram_message_thread_id`). Will be removed in 0.6.0.
+
+### Coverage
+
+Suite: 393/393 pass (376 prior + 17 new for remediation-Telegram
+migration). Project-wide coverage 84% (canonical measurement; the
+pytest-cov number that previously read 67% was a tool quirk, not a
+real regression).
+
 ## 0.5.0rc2 (2026-05-13)
 
 Adds Telegram as the **recommended default notifier** for new consumers.
