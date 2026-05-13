@@ -36,3 +36,5 @@ scripts/
 
 # Internal planning docs (not for public repo)
 private/
+.coverage
+htmlcov/
