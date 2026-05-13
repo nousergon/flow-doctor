@@ -49,6 +49,8 @@ _ENV_FALLBACKS: Dict[str, List[str]] = {
     "slack_webhook": ["FLOW_DOCTOR_SLACK_WEBHOOK", "SLACK_WEBHOOK_URL"],
     "anthropic_api_key": ["FLOW_DOCTOR_ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY"],
     "s3_bucket": ["FLOW_DOCTOR_S3_BUCKET", "CHANGELOG_BUCKET"],
+    "telegram_bot_token": ["FLOW_DOCTOR_TELEGRAM_BOT_TOKEN", "TELEGRAM_BOT_TOKEN"],
+    "telegram_chat_id": ["FLOW_DOCTOR_TELEGRAM_CHAT_ID", "TELEGRAM_CHAT_ID"],
 }
 
 
@@ -288,10 +290,51 @@ class FlowDoctor:
                     default_resolution_type=nc.default_resolution_type,
                 ))
 
+            elif nc.type == "telegram":
+                bot_token = nc.bot_token or _env_fallback("telegram_bot_token")
+                raw_chat = nc.chat_id
+                if raw_chat is None:
+                    raw_chat = _env_fallback("telegram_chat_id")
+                    # chat_id from env is a string; coerce to int when
+                    # it's a numeric id (negative for channels/groups,
+                    # positive for users) so the Bot API receives the
+                    # right JSON type. ``@channelusername`` style stays str.
+                    if raw_chat is not None and (
+                        raw_chat.lstrip("-").isdigit()
+                    ):
+                        raw_chat = int(raw_chat)
+                missing = []
+                if not bot_token:
+                    missing.append(
+                        f"bot_token (or one of: "
+                        f"{', '.join(_ENV_FALLBACKS['telegram_bot_token'])}). "
+                        "Create one via @BotFather → /newbot"
+                    )
+                if raw_chat in (None, ""):
+                    missing.append(
+                        f"chat_id (or one of: "
+                        f"{', '.join(_ENV_FALLBACKS['telegram_chat_id'])}). "
+                        "After messaging the bot, look it up at "
+                        "https://api.telegram.org/bot<TOKEN>/getUpdates"
+                    )
+                if missing:
+                    raise ConfigError(
+                        f"{label}: telegram notifier is missing required field(s): "
+                        f"{'; '.join(missing)}."
+                    )
+                from flow_doctor.notify.telegram import TelegramNotifier
+                notifiers.append(TelegramNotifier(
+                    bot_token=bot_token,
+                    chat_id=raw_chat,
+                    message_thread_id=nc.message_thread_id,
+                    parse_mode=nc.parse_mode,
+                    disable_notification=nc.disable_notification,
+                ))
+
             else:
                 raise ConfigError(
                     f"{label}: unknown notifier type '{nc.type}'. "
-                    f"Supported types: slack, email, github, s3."
+                    f"Supported types: slack, email, github, s3, telegram."
                 )
 
         return notifiers
@@ -708,6 +751,7 @@ class FlowDoctor:
             from flow_doctor.notify.email import EmailNotifier
             from flow_doctor.notify.github import GitHubNotifier
             from flow_doctor.notify.s3 import S3Notifier
+            from flow_doctor.notify.telegram import TelegramNotifier
 
             if isinstance(notifier, SlackNotifier):
                 action_type = ActionType.SLACK_ALERT.value
@@ -717,6 +761,8 @@ class FlowDoctor:
                 action_type = ActionType.GITHUB_ISSUE.value
             elif isinstance(notifier, S3Notifier):
                 action_type = ActionType.S3_ALERT.value
+            elif isinstance(notifier, TelegramNotifier):
+                action_type = ActionType.TELEGRAM_ALERT.value
             else:
                 action_type = "unknown_alert"
 

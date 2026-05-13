@@ -6,6 +6,7 @@ from flow_doctor.notify.configs import (
     NotifierConfig,
     S3NotifierConfig,
     SlackNotifierConfig,
+    TelegramNotifierConfig,
 )
 
 __all__ = [
@@ -14,4 +15,5 @@ __all__ = [
     "NotifierConfig",
     "S3NotifierConfig",
     "SlackNotifierConfig",
+    "TelegramNotifierConfig",
 ]
