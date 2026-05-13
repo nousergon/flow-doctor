@@ -13,6 +13,7 @@ from flow_doctor.notify.configs import (
     NotifierConfig,
     S3NotifierConfig,
     SlackNotifierConfig,
+    TelegramNotifierConfig,
 )
 
 __all__ = [
@@ -28,8 +29,9 @@ __all__ = [
     "S3NotifierConfig",
     "Severity",
     "SlackNotifierConfig",
+    "TelegramNotifierConfig",
     "context",
     "current_context",
     "init",
 ]
-__version__ = "0.5.0rc1"
+__version__ = "0.5.0rc2"

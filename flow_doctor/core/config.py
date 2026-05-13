@@ -13,7 +13,7 @@ from __future__ import annotations
 import os
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field
@@ -46,7 +46,7 @@ class _ConfigModel(BaseModel):
     category=None,
 )
 class NotifyChannelConfig(_ConfigModel):
-    type: str  # "slack", "email", "github", or "s3"
+    type: str  # "slack", "email", "github", "s3", or "telegram"
     # Slack fields
     webhook_url: Optional[str] = None
     channel: Optional[str] = None
@@ -68,6 +68,13 @@ class NotifyChannelConfig(_ConfigModel):
     entry_prefix: str = "changelog/entries"
     default_root_cause_category: str = "code_bug"
     default_resolution_type: Optional[str] = None
+    # Telegram fields (Bot API). bot_token + chat_id are required at
+    # init time; message_thread_id is optional for forum topics.
+    bot_token: Optional[str] = None
+    chat_id: Optional[Union[int, str]] = None
+    message_thread_id: Optional[int] = None
+    parse_mode: Optional[str] = "Markdown"
+    disable_notification: bool = False
 
 
 class StoreConfig(_ConfigModel):
@@ -278,6 +285,11 @@ def _parse_notify_dicts(items: List[Dict]) -> List[NotifyChannelConfig]:
             entry_prefix=item.get("entry_prefix", "changelog/entries"),
             default_root_cause_category=item.get("default_root_cause_category", "code_bug"),
             default_resolution_type=item.get("default_resolution_type"),
+            bot_token=item.get("bot_token"),
+            chat_id=item.get("chat_id"),
+            message_thread_id=item.get("message_thread_id"),
+            parse_mode=item.get("parse_mode", "Markdown"),
+            disable_notification=item.get("disable_notification", False),
         ))
     return configs
 

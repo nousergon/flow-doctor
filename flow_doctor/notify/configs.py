@@ -21,6 +21,11 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from flow_doctor.core.config import NotifyChannelConfig
 
+# Telegram chat_id may be an integer (typical) or a "@channelusername"
+# string (public channels only). The typed config preserves the
+# union; the legacy omnibus form already accepts ``Union[int, str]``.
+TelegramChatId = Union[int, str]
+
 
 class _NotifierConfigBase(BaseModel):
     model_config = ConfigDict(extra="ignore", validate_assignment=False)
@@ -107,6 +112,42 @@ class S3NotifierConfig(_NotifierConfigBase):
         )
 
 
+class TelegramNotifierConfig(_NotifierConfigBase):
+    """Recommended default notifier (since 0.5.0rc2).
+
+    Setup: message ``@BotFather`` → ``/newbot`` → save the bot token.
+    Add the bot to your target chat. Look up the ``chat_id`` via
+    ``GET https://api.telegram.org/bot<TOKEN>/getUpdates`` after sending
+    the bot a message. For forum-style supergroups, also note the
+    ``message_thread_id`` of the topic you want notifications routed to.
+    """
+
+    type: Literal["telegram"] = "telegram"
+    bot_token: Optional[str] = None
+    chat_id: Optional[TelegramChatId] = None
+    # Forum supergroups support per-topic routing — use this to fan out
+    # N flow-doctor flows (am, pm, alpha-engine, predictor, ...) into
+    # one chat without N bots.
+    message_thread_id: Optional[int] = None
+    # Telegram parse_mode for the message body. ``Markdown`` matches
+    # the legacy / minimal Markdown flavour; pass ``MarkdownV2`` for
+    # the strict escaping mode, ``HTML`` for HTML, or ``None`` for
+    # plain text.
+    parse_mode: Optional[str] = "Markdown"
+    # Silent delivery — Telegram still pushes but without a sound.
+    disable_notification: bool = False
+
+    def to_channel_config(self) -> NotifyChannelConfig:
+        return NotifyChannelConfig(
+            type="telegram",
+            bot_token=self.bot_token,
+            chat_id=self.chat_id,
+            message_thread_id=self.message_thread_id,
+            parse_mode=self.parse_mode,
+            disable_notification=self.disable_notification,
+        )
+
+
 # Discriminated union of all typed notifier configs. Consumers can
 # type-hint as ``NotifierConfig`` and Pydantic will pick the right
 # concrete model based on the ``type`` field.
@@ -116,6 +157,7 @@ NotifierConfig = Annotated[
         EmailNotifierConfig,
         GitHubNotifierConfig,
         S3NotifierConfig,
+        TelegramNotifierConfig,
     ],
     Field(discriminator="type"),
 ]
@@ -127,4 +169,5 @@ __all__ = [
     "NotifierConfig",
     "S3NotifierConfig",
     "SlackNotifierConfig",
+    "TelegramNotifierConfig",
 ]

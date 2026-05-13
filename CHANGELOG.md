@@ -2,6 +2,43 @@
 
 ## Unreleased
 
+## 0.5.0rc2 (2026-05-13)
+
+Adds Telegram as the **recommended default notifier** for new consumers.
+
+### Added
+
+- **`TelegramNotifier` + `TelegramNotifierConfig`.** Sends alerts via the
+  Telegram Bot API. Setup is two minutes (message `@BotFather` → `/newbot`
+  → save the token → grab the `chat_id` from
+  `https://api.telegram.org/bot<TOKEN>/getUpdates`). One bot fans out to
+  N flows via `chat_id` and the optional `message_thread_id` (forum
+  topics in supergroups), no per-channel webhook required.
+  Env-var contract: `FLOW_DOCTOR_TELEGRAM_BOT_TOKEN` +
+  `FLOW_DOCTOR_TELEGRAM_CHAT_ID` (with `TELEGRAM_BOT_TOKEN` /
+  `TELEGRAM_CHAT_ID` as conventional aliases).
+  Numeric env chat_ids auto-coerce to `int`; `@channelusername` style
+  stays `str`. Persisted action target is the non-secret
+  `telegram:<chat_id>[:<thread>]` identifier — never the bot token.
+- **`ActionType.TELEGRAM_ALERT`** in the persisted action enum.
+- **Telegram parse / payload knobs** in both the typed config and the
+  yaml-driven omnibus form: `parse_mode` (default `"Markdown"`),
+  `disable_notification`, `message_thread_id`.
+- **Preflight bypass parity.** `TelegramNotifier.validate()` calls
+  `/getMe` to fail fast on a revoked bot token, with the same
+  `FLOW_DOCTOR_SKIP_PREFLIGHT=1` opt-out the other notifiers use for
+  tests / offline boot.
+
+### Rationale
+
+For single-dev and small-team ops, Telegram beats SMTP/SES/Slack on
+setup cost (no app password, no verified-identity dance, no workspace
+admin), routing (per-chat or per-thread is built in), and mobile UX
+(push is automatic). Slack / Email / GitHub / S3 stay as alternates;
+the change is to which notifier the README + builder examples lead with.
+
+Suite: 376/376 pass (+20 new Telegram tests).
+
 ## 0.5.0rc1 (2026-05-13)
 
 Release-candidate cut of the "plug-and-play" release for internal soak.

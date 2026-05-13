@@ -260,4 +260,4 @@ def test_notifier_config_union_rejects_unknown_type():
 
     adapter = TypeAdapter(NotifierConfig)
     with pytest.raises(ValidationError):
-        adapter.validate_python({"type": "telegram", "webhook_url": "x"})
+        adapter.validate_python({"type": "pagerduty", "service_key": "x"})
