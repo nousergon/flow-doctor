@@ -11,10 +11,13 @@ import logging
 import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from flow_doctor.remediation.decision_gate import Decision, DecisionType
 from flow_doctor.remediation.playbook import RemediationAction, RemediationType
+
+if TYPE_CHECKING:
+    from flow_doctor.notify.telegram import TelegramNotifier
 
 logger = logging.getLogger("flow_doctor.remediation")
 
@@ -47,13 +50,26 @@ class RemediationExecutor:
         sfn_client=None,
         ec2_client=None,
         store=None,
+        telegram_notifier: "Optional[TelegramNotifier]" = None,
         telegram_webhook_url: Optional[str] = None,
     ):
+        """
+        Args:
+            telegram_notifier: First-class ``TelegramNotifier`` to route
+                remediation pings through (preferred since 0.5.0rc3).
+                When supplied, gets bot-token / chat-id / threading /
+                Markdown formatting / target-id auditing.
+            telegram_webhook_url: Legacy back-compat path — POSTs a
+                ``{"text": ...}`` body to an arbitrary URL via urllib.
+                Kept so 0.4.x ``flow-doctor.yaml`` configs keep working
+                without code changes; will be removed in 0.6.0.
+        """
         self.dry_run = dry_run
         self._ssm = ssm_client
         self._sfn = sfn_client
         self._ec2 = ec2_client
         self._store = store
+        self._telegram_notifier = telegram_notifier
         self._telegram_url = telegram_webhook_url
 
     def execute(self, decision: Decision) -> ExecutionResult:
@@ -249,24 +265,32 @@ class RemediationExecutor:
             logger.error("Failed to save remediation audit: %s", e)
 
     def _notify_telegram(self, decision: Decision, result: ExecutionResult) -> None:
-        """Send Telegram notification for every remediation action."""
-        if not self._telegram_url:
+        """Send Telegram notification for every remediation action.
+
+        Preferred path (0.5.0rc3+): a first-class ``TelegramNotifier``
+        passed via ``telegram_notifier=``. The pre-rc3 ``telegram_webhook_url``
+        path is kept for back-compat with 0.4.x yaml configs and will be
+        removed in 0.6.0.
+        """
+        if not self._telegram_notifier and not self._telegram_url:
             return
 
-        try:
-            emoji = "✅" if result.success else "❌"
-            mode = "[DRY RUN] " if result.dry_run else ""
-            pattern = decision.playbook_match.name if decision.playbook_match else "unknown"
-            msg = (
-                f"{emoji} {mode}flow-doctor auto-remediation\n"
-                f"Pattern: {pattern}\n"
-                f"Action: {result.action_type}\n"
-                f"Flow: {decision.diagnosis.flow_name}\n"
-                f"Root cause: {decision.diagnosis.root_cause[:200]}\n"
-            )
-            if result.error:
-                msg += f"Error: {result.error[:200]}\n"
+        msg = self._format_remediation_message(decision, result)
 
+        # Prefer the first-class notifier when configured.
+        if self._telegram_notifier is not None:
+            try:
+                self._telegram_notifier.send_raw(msg)
+            except Exception as e:
+                # send_raw() already logs + swallows; this except is the
+                # belt-and-suspenders barrier for anything that slips
+                # past, since the executor must never crash on
+                # notification failure.
+                logger.warning("Telegram notifier failed: %s", e)
+            return
+
+        # Legacy webhook-URL path.
+        try:
             import urllib.request
             data = json.dumps({"text": msg}).encode("utf-8")
             req = urllib.request.Request(
@@ -277,3 +301,25 @@ class RemediationExecutor:
             urllib.request.urlopen(req, timeout=5)
         except Exception as e:
             logger.warning("Telegram notification failed: %s", e)
+
+    @staticmethod
+    def _format_remediation_message(
+        decision: Decision, result: ExecutionResult
+    ) -> str:
+        emoji = "✅" if result.success else "❌"
+        mode = "[DRY RUN] " if result.dry_run else ""
+        pattern = (
+            decision.playbook_match.name
+            if decision.playbook_match
+            else "unknown"
+        )
+        msg = (
+            f"{emoji} {mode}flow-doctor auto-remediation\n"
+            f"Pattern: {pattern}\n"
+            f"Action: {result.action_type}\n"
+            f"Flow: {decision.diagnosis.flow_name}\n"
+            f"Root cause: {decision.diagnosis.root_cause[:200]}\n"
+        )
+        if result.error:
+            msg += f"Error: {result.error[:200]}\n"
+        return msg

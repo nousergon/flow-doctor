@@ -387,9 +387,35 @@ class FlowDoctor:
                 gate_config.market_close_hour = 0
 
             self._decision_gate = DecisionGate(config=gate_config, store=self._store)
+
+            # Preferred Telegram path (since 0.5.0rc3): build a real
+            # TelegramNotifier from the config and hand it to the
+            # executor. Falls back to the legacy webhook URL when only
+            # that's configured (for 0.4.x yaml back-compat).
+            telegram_notifier = None
+            tg_token = (
+                config.remediation.telegram_bot_token
+                or _env_fallback("telegram_bot_token")
+            )
+            tg_chat = config.remediation.telegram_chat_id
+            if tg_chat is None:
+                env_chat = _env_fallback("telegram_chat_id")
+                if env_chat is not None and env_chat.lstrip("-").isdigit():
+                    tg_chat = int(env_chat)
+                elif env_chat is not None:
+                    tg_chat = env_chat
+            if tg_token and tg_chat not in (None, ""):
+                from flow_doctor.notify.telegram import TelegramNotifier
+                telegram_notifier = TelegramNotifier(
+                    bot_token=tg_token,
+                    chat_id=tg_chat,
+                    message_thread_id=config.remediation.telegram_message_thread_id,
+                )
+
             self._remediation_executor = RemediationExecutor(
                 dry_run=config.remediation.dry_run,
                 store=self._store,
+                telegram_notifier=telegram_notifier,
                 telegram_webhook_url=config.remediation.telegram_webhook_url,
             )
         except Exception as e:

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "flow-doctor"
-version = "0.5.0rc2"
+version = "0.5.0rc3"
 description = "Pipeline error handler: capture, deduplicate, diagnose, and auto-fix failures."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -62,6 +62,29 @@ include = ["flow_doctor*"]
 # Ship PEP 561 marker so mypy/pyright treat flow-doctor's annotations as
 # authoritative when consumers depend on flow-doctor in --strict mode.
 flow_doctor = ["py.typed"]
+
+[tool.coverage.run]
+# Canonical coverage entry — invoke as
+#   python -m coverage run -m pytest && python -m coverage report
+# pytest-cov's --cov= flag misreports module-level statement coverage
+# under editable installs (`pip install -e .`) because it instruments
+# AFTER the import has already happened; the direct ``coverage run``
+# path measures correctly.
+source = ["flow_doctor"]
+branch = true
+omit = [
+    "tests/*",
+    "*/__pycache__/*",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+    "if __name__ == .__main__.:",
+]
+show_missing = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -27,7 +27,7 @@ from __future__ import annotations
 import json
 import logging
 import sys
-from typing import Optional, Union
+from typing import Any, Optional, Union
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
@@ -41,6 +41,11 @@ _logger = logging.getLogger("flow_doctor")
 # long traceback / log capture.
 _MAX_MESSAGE_LEN = 4096
 _TRUNCATION_SUFFIX = "\n…[truncated]"
+
+# Sentinel for ``send_raw`` overrides — lets us distinguish "caller
+# didn't pass this kwarg, use instance default" from "caller explicitly
+# passed None to override to plain text / push-with-sound".
+_UNSET: Any = object()
 
 
 class TelegramNotifier(Notifier):
@@ -143,6 +148,82 @@ class TelegramNotifier(Notifier):
             print(
                 f"[flow-doctor] Telegram notification failed: {e}",
                 file=sys.stderr,
+            )
+            return None
+
+    def send_raw(
+        self,
+        text: str,
+        *,
+        parse_mode: Any = _UNSET,
+        disable_notification: Any = _UNSET,
+    ) -> Optional[str]:
+        """POST an arbitrary text message to the configured chat.
+
+        Distinct from :meth:`send`, which formats a structured Report.
+        ``send_raw`` is the convenience for adjacent flow-doctor
+        subsystems (remediation, custom success pings) that want to ride
+        the same bot + chat + thread routing without conforming to the
+        Report shape. Returns the standard non-secret target identifier
+        on success, or None on failure (errors are logged, never raised).
+
+        ``parse_mode`` and ``disable_notification`` default to the
+        instance values supplied at construction time. Explicit
+        overrides — including ``parse_mode=None`` for plain-text
+        rendering when the body contains characters that Markdown
+        would otherwise mangle — are honoured. The sentinel lets us
+        distinguish "use instance default" from "explicit None".
+        """
+        text = _truncate(text)
+        payload: dict = {
+            "chat_id": self.chat_id,
+            "text": text,
+        }
+        mode = self.parse_mode if parse_mode is _UNSET else parse_mode
+        if mode:
+            payload["parse_mode"] = mode
+        if self.message_thread_id is not None:
+            payload["message_thread_id"] = self.message_thread_id
+        quiet = (
+            self.disable_notification
+            if disable_notification is _UNSET
+            else disable_notification
+        )
+        if quiet:
+            payload["disable_notification"] = True
+
+        try:
+            data = json.dumps(payload).encode("utf-8")
+            req = Request(
+                f"{self._API_BASE}/bot{self.bot_token}/sendMessage",
+                data=data,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urlopen(req, timeout=10) as resp:
+                if resp.status == 200:
+                    body = resp.read().decode("utf-8", errors="replace")
+                    try:
+                        parsed = json.loads(body)
+                    except json.JSONDecodeError:
+                        parsed = {}
+                    if parsed.get("ok"):
+                        target = f"telegram:{self.chat_id}"
+                        if self.message_thread_id is not None:
+                            target += f":{self.message_thread_id}"
+                        return target
+                    _logger.critical(
+                        "flow-doctor Telegram send_raw ok=false: %s",
+                        parsed.get("description", "unknown"),
+                    )
+                    return None
+                _logger.critical(
+                    "flow-doctor Telegram send_raw HTTP %s", resp.status,
+                )
+                return None
+        except Exception as e:
+            _logger.warning(
+                "flow-doctor Telegram send_raw failed: %s", e,
             )
             return None
 
