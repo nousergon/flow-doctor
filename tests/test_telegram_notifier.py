@@ -311,6 +311,52 @@ def test_send_notifications_dispatches_to_telegram_action_type(monkeypatch):
         assert not any("t" == t for t in targets)  # never the raw token
 
 
+def test_successful_dispatch_emits_info_log_line(monkeypatch, caplog):
+    """Symmetric observability: when a notifier successfully delivers a
+    failure report, flow-doctor MUST log an INFO line so operators can
+    confirm from journalctl that the alert fired. Without this, a
+    successful dispatch is indistinguishable from a silent swallow.
+
+    Surfaced 2026-05-26 — morning-signal's 5/26 AM (and 5/25 PM) cron
+    firings failed and the operator received no Telegram. Investigation
+    found flow-doctor was running and the failure path was entered, but
+    there was no journal evidence that the dispatch actually fired. The
+    success-side path already logs ``notify: success -> telegram:...``
+    from the caller; this commit adds the symmetric log on the failure-
+    report dispatch path.
+    """
+    import logging
+
+    monkeypatch.setenv("FLOW_DOCTOR_TELEGRAM_BOT_TOKEN", "t")
+    monkeypatch.setenv("FLOW_DOCTOR_TELEGRAM_CHAT_ID", "1")
+
+    with tempfile.NamedTemporaryFile(suffix=".db") as f:
+        fd = init(
+            store={"type": "sqlite", "path": f.name},
+            notify=[{"type": "telegram"}],
+        )
+
+        caplog.set_level(logging.INFO, logger="flow_doctor")
+        with patch("flow_doctor.notify.telegram.urlopen") as mock_urlopen:
+            mock_urlopen.return_value = _fake_urlopen_response({"ok": True})
+            report_id = fd.report(ValueError("boom"))
+
+    assert report_id is not None
+    dispatch_logs = [
+        r for r in caplog.records
+        if r.levelno == logging.INFO
+        and "dispatched report" in r.getMessage()
+        and ActionType.TELEGRAM_ALERT.value in r.getMessage()
+    ]
+    assert dispatch_logs, (
+        "Expected an INFO log line on successful notifier dispatch — "
+        "this is the symmetric counterpart to the existing CRITICAL "
+        "log on dispatch failure. Without it, operators can't tell "
+        "from journalctl whether a failure report actually fired."
+    )
+    assert "telegram:" in dispatch_logs[0].getMessage()
+
+
 # ---------------------------------------------------------------------------
 # Preflight — bypassed by FLOW_DOCTOR_SKIP_PREFLIGHT
 # ---------------------------------------------------------------------------
