@@ -829,6 +829,11 @@ class FlowDoctor:
                         "(notifier-specific reason logged separately)",
                         action_type, report.id,
                     )
+                else:
+                    _logger.info(
+                        "flow-doctor: notifier %s dispatched report %s -> %s",
+                        action_type, report.id, target,
+                    )
             except Exception as e:
                 failed.append(action_type)
                 _logger.critical(
