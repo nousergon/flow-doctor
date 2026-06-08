@@ -236,9 +236,9 @@ class TestCaptureLogs:
 
 class TestInit:
     def test_init_function(self):
-        """flow_doctor.init() should return a FlowDoctor instance."""
+        """flow_doctor.FlowDoctor.from_config() should return a FlowDoctor instance."""
         f = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
-        fd = flow_doctor.init(
+        fd = flow_doctor.FlowDoctor.from_config(
             flow_name="test-init",
             store=f"sqlite://{f.name}",
         )

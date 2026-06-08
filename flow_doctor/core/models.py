@@ -22,6 +22,10 @@ class Severity(str, Enum):
     CRITICAL = "critical"
     ERROR = "error"
     WARNING = "warning"
+    # Healthy-completion / success pings. Lower than WARNING — never
+    # triggers diagnosis or remediation; only reaches notifiers that
+    # explicitly opt in via ``notify_on`` (see NotifierConfig).
+    INFO = "info"
 
 
 class ActionType(str, Enum):

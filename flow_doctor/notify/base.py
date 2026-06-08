@@ -3,13 +3,20 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Optional
+from typing import Optional, Set
 
 from flow_doctor.core.models import Diagnosis, Report
 
 
 class Notifier(ABC):
     """Pluggable notification interface."""
+
+    # Severity routing for this notifier instance, set by
+    # ``FlowDoctor._init_notifiers`` from the config's ``notify_on``. A set
+    # of severity strings (e.g. {"critical", "error", "info"}); when None
+    # the dispatcher applies the default set {critical, error}. Custom
+    # notifier subclasses inherit this attribute and need not set it.
+    notify_on: Optional[Set[str]] = None
 
     @abstractmethod
     def send(

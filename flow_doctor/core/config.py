@@ -17,7 +17,6 @@ from typing import Any, Dict, List, Optional, Union
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field
-from typing_extensions import deprecated
 
 from flow_doctor.core.errors import ConfigError
 
@@ -35,18 +34,25 @@ class _ConfigModel(BaseModel):
     model_config = ConfigDict(extra="ignore", validate_assignment=False)
 
 
-@deprecated(
-    "NotifyChannelConfig is deprecated for direct use; construct a typed "
-    "SlackNotifierConfig / EmailNotifierConfig / GitHubNotifierConfig / "
-    "S3NotifierConfig from flow_doctor.notify instead. Will be removed in "
-    "0.6.0. (Static-only deprecation — no runtime DeprecationWarning is "
-    "emitted because the omnibus model is still the internal lingua franca "
-    "that the builder folds typed configs into; only consumers constructing "
-    "it explicitly trip the type-checker.)",
-    category=None,
-)
 class NotifyChannelConfig(_ConfigModel):
+    """Internal omnibus notifier config — the lingua franca that
+    ``FlowDoctor._init_notifiers`` consumes.
+
+    Not part of the public API: construct a typed ``SlackNotifierConfig`` /
+    ``EmailNotifierConfig`` / ``GitHubNotifierConfig`` / ``S3NotifierConfig`` /
+    ``TelegramNotifierConfig`` from ``flow_doctor.notify`` instead. The
+    ``@deprecated`` marker that flagged direct construction was dropped in
+    0.6.0 — the typed configs now fold into this model via
+    ``to_channel_config()``, so this is purely an internal representation.
+    """
+
     type: str  # "slack", "email", "github", "s3", or "telegram"
+    # Per-notifier severity routing. When None, the dispatcher applies the
+    # default set {critical, error} (warnings + info skipped). Set e.g.
+    # ["critical", "error", "info"] to also receive healthy-completion
+    # pings on this channel, or ["warning"] to fan ad-hoc warnings to a
+    # separate channel. See FlowDoctor._send_notifications.
+    notify_on: Optional[List[str]] = None
     # Slack fields
     webhook_url: Optional[str] = None
     channel: Optional[str] = None
@@ -60,6 +66,16 @@ class NotifyChannelConfig(_ConfigModel):
     repo: Optional[str] = None
     token: Optional[str] = None
     labels: Optional[List[str]] = None
+    # Auto-issue toggle: when False, this github notifier files NO issue
+    # (the notifier is skipped at init). Lets a consumer keep the block in
+    # config but silence issue creation without deleting it. Default True.
+    auto_create_issue: bool = True
+    # Auto-fix-PR toggle: when True, after filing the issue the notifier
+    # applies ``fix_label`` to it, which fires the flow-doctor-fix GitHub
+    # Actions workflow (LLM diff -> scope guard -> test gate -> PR) with no
+    # human label step. Default False (the human-in-the-loop default).
+    auto_fix_pr: bool = False
+    fix_label: str = "flow-doctor:fix"
     # S3 fields (writes schema-1.0.0 entries to the system-wide changelog
     # corpus — closes the flow-doctor side of the changelog event-mining
     # coverage gaps roadmap item).
@@ -228,7 +244,8 @@ def _resolve_env_vars(value: str, *, allow_unresolved: bool = False) -> str:
         names = ", ".join(unique_missing)
         raise ConfigError(
             f"Unresolved environment variable(s) in flow-doctor config: {names}. "
-            f"Set these in the process environment before calling flow_doctor.init(). "
+            f"Set these in the process environment before constructing flow-doctor "
+            f"(FlowDoctor.from_config / FlowDoctor.builder). "
             f"See the FLOW_DOCTOR_* env var contract in the README."
         )
 
@@ -285,6 +302,7 @@ def _parse_notify_dicts(items: List[Dict]) -> List[NotifyChannelConfig]:
         item = _resolve_dict(item)
         configs.append(NotifyChannelConfig(
             type=item.get("type", "slack"),
+            notify_on=item.get("notify_on"),
             webhook_url=item.get("webhook_url"),
             channel=item.get("channel"),
             sender=item.get("sender"),
@@ -295,6 +313,9 @@ def _parse_notify_dicts(items: List[Dict]) -> List[NotifyChannelConfig]:
             repo=item.get("repo"),
             token=item.get("token"),
             labels=item.get("labels"),
+            auto_create_issue=item.get("auto_create_issue", True),
+            auto_fix_pr=item.get("auto_fix_pr", False),
+            fix_label=item.get("fix_label", "flow-doctor:fix"),
             bucket=item.get("bucket"),
             subsystem=item.get("subsystem"),
             entry_prefix=item.get("entry_prefix", "changelog/entries"),

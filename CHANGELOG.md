@@ -1,5 +1,50 @@
 # Changelog
 
+## 0.6.0rc1 (2026-06-08)
+
+Soak release for the 0.6.0 line. Notification-routing + auto-remediation
+control, plus the deprecated-API removal.
+
+### Added
+
+- **Healthy-completion API — `FlowDoctor.notify_success(subject, body=None,
+  *, context=None)`** (+ async `notify_success_async`). Sends a success
+  ping at the new **`Severity.INFO`** level. Persisted like any report but
+  never triggers dedup / diagnosis / remediation, and routed only to
+  notifiers that opt into `info`. Closes the gap that forced consumers to
+  reach into `fd._notifiers` to signal "pipeline finished OK".
+- **Per-notifier severity routing — `notify_on`** on every notifier config
+  (`TelegramNotifierConfig(notify_on=["critical", "error", "info"])`, etc.).
+  When unset, the default is `{critical, error}` (warnings + info skipped),
+  preserving prior behaviour. Replaces the hardcoded blanket "skip warnings"
+  in the dispatcher, so you can route failures to one channel and success
+  pings or ad-hoc warnings to another.
+- **Auto-issue toggle — `GitHubNotifierConfig(auto_create_issue=...)`**
+  (default `True`). When `False`, the github notifier files no issue and is
+  skipped at init (the config block can stay in place).
+- **Auto-fix-PR toggle — `GitHubNotifierConfig(auto_fix_pr=...)`** (default
+  `False`) + `fix_label` (default `flow-doctor:fix`). When `True`, the
+  notifier applies the fix label to each filed issue, firing the existing
+  flow-doctor-fix GitHub Actions pipeline (LLM diff → scope guard → test
+  gate → PR) with no human label step. Labeling is best-effort — a failure
+  never flips the issue-creation success.
+- **`FlowDoctor.from_config(config_path=None, *, strict=True, **kwargs)`** —
+  the supported yaml entry point (same contract as the removed `init()`).
+
+### Removed (breaking)
+
+- **`flow_doctor.init()`** — removed. Migrate to `FlowDoctor.from_config(...)`
+  (identical signature) or the typed `FlowDoctor.builder()`.
+- **`@deprecated` marker on the internal `NotifyChannelConfig`** — the
+  omnibus model is now purely an internal representation; construct typed
+  `*NotifierConfig` objects from `flow_doctor.notify` instead.
+
+### Notes
+
+- Deferred to a later 0.6.0 rc: the OTLP exporter notifier and the
+  `pydantic-settings` `FLOW_DOCTOR_*` autoload (both additive).
+- Suite: 403 passing.
+
 ## 0.5.0 (2026-06-08)
 
 First stable release. Finalizes the `0.5.0rc1` → `rc3` plug-and-play arc

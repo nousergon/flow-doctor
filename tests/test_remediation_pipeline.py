@@ -130,7 +130,7 @@ class TestFullPipeline:
         """Create a FlowDoctor instance with remediation enabled."""
         db_path = str(tmp_path / "flow_doctor_pipeline.db")
 
-        fd = flow_doctor.init(
+        fd = flow_doctor.FlowDoctor.from_config(
             flow_name="executor-planner",
             repo="test-org/test-repo",
             store={"type": "sqlite", "path": db_path},
@@ -364,7 +364,7 @@ class TestEndToEnd:
         """Create a FlowDoctor with a fake diagnosis provider and remediation enabled."""
         db_path = str(tmp_path / "e2e_test.db")
 
-        fd = flow_doctor.init(
+        fd = flow_doctor.FlowDoctor.from_config(
             flow_name="executor-planner",
             repo="test-org/test-repo",
             store={"type": "sqlite", "path": db_path},
@@ -584,7 +584,7 @@ class TestEndToEnd:
         db_path = str(tmp_path / "cost_cap_test.db")
 
         # Use a tiny cost cap ($0.002) — our fake provider costs $0.001 per call
-        fd = flow_doctor.init(
+        fd = flow_doctor.FlowDoctor.from_config(
             flow_name="executor-planner",
             repo="test-org/test-repo",
             store={"type": "sqlite", "path": db_path},

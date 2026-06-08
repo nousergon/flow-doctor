@@ -14,7 +14,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from flow_doctor import init
+from flow_doctor import FlowDoctor
 
 
 @pytest.fixture
@@ -137,7 +137,7 @@ def test_dispatcher_persists_target_in_action_table(sqlite_store, monkeypatch):
     """The _send_notifications dispatcher should persist the URL in actions.target."""
     monkeypatch.setenv("FLOW_DOCTOR_GITHUB_TOKEN", "ghp_test")
 
-    fd = init(
+    fd = FlowDoctor.from_config(
         flow_name="test",
         store=sqlite_store,
         notify=[{"type": "github", "repo": "cipher813/test"}],
@@ -172,7 +172,7 @@ def test_dispatcher_persists_none_target_on_failure(sqlite_store, monkeypatch):
     """If send() returns None (failure), action.target should be None."""
     monkeypatch.setenv("FLOW_DOCTOR_GITHUB_TOKEN", "ghp_test")
 
-    fd = init(
+    fd = FlowDoctor.from_config(
         flow_name="test",
         store=sqlite_store,
         notify=[{"type": "github", "repo": "cipher813/test"}],

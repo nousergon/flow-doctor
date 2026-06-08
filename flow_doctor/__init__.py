@@ -3,7 +3,7 @@
 from flow_doctor._protocol import FlowDoctorProtocol
 from flow_doctor.core._context import context, current_context
 from flow_doctor.core.builder import FlowDoctorBuilder
-from flow_doctor.core.client import FlowDoctor, init
+from flow_doctor.core.client import FlowDoctor
 from flow_doctor.core.errors import ConfigError, FlowDoctorError
 from flow_doctor.core.handler import FlowDoctorHandler
 from flow_doctor.core.models import Severity
@@ -32,6 +32,5 @@ __all__ = [
     "TelegramNotifierConfig",
     "context",
     "current_context",
-    "init",
 ]
-__version__ = "0.5.0"
+__version__ = "0.6.0rc1"
