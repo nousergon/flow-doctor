@@ -1,6 +1,27 @@
 # Changelog
 
-## Unreleased
+## 0.5.0 (2026-06-08)
+
+First stable release. Finalizes the `0.5.0rc1` → `rc3` plug-and-play arc
+(typed Pydantic v2 config, fluent `FlowDoctor.builder()`,
+`FlowDoctorProtocol`, the `flow_doctor.testing` pytest plugin, PEP 561
+`py.typed`, fail-loud-on-misconfig, the `flow_doctor.otel` adapter, and
+the recommended-default `TelegramNotifier`) after a ~4-week production
+soak across morning-signal and the alpha-engine fleet. See the rc
+entries below for the full per-rc breakdown.
+
+### Added
+
+- **Symmetric INFO log on successful failure-report dispatch.** Every
+  successful notifier dispatch now emits a matching `INFO` log, mirroring
+  the existing failure-path log, so dispatch is observable in both
+  directions (merged post-rc3 via #24).
+
+### Notes
+
+- No API changes versus `0.5.0rc3` beyond the dispatch log above; the rc
+  series is superseded by this tag.
+- Suite: 394 passing.
 
 ## 0.5.0rc3 (2026-05-13)
 
