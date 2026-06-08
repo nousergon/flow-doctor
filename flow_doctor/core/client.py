@@ -34,10 +34,13 @@ from flow_doctor.storage.base import StorageBackend
 # own logging configuration (journalctl, Sentry, Datadog, etc.).
 _logger = logging.getLogger("flow_doctor")
 
-# Env var fallback chains. Each notifier field falls back through this list,
-# stopping at the first non-empty value. FLOW_DOCTOR_* names are the canonical
-# contract; the others are conveniences that pick up common conventions like
-# the `gh` CLI's GH_TOKEN or GitHub Actions' GITHUB_TOKEN.
+# Env var fallback chains, kept as the source for the named-field ConfigError
+# messages ("set it via one of: FLOW_DOCTOR_X, Y"). The actual resolution now
+# runs through the typed FlowDoctorSettings (pydantic-settings) contract in
+# flow_doctor.core.settings, which encodes the same chains as AliasChoices and
+# additionally reads a .env file and a secrets directory. FLOW_DOCTOR_* names
+# are the canonical contract; the others are conveniences that pick up common
+# conventions like the `gh` CLI's GH_TOKEN or GitHub Actions' GITHUB_TOKEN.
 _ENV_FALLBACKS: Dict[str, List[str]] = {
     "github_token": ["FLOW_DOCTOR_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"],
     "github_repo": ["FLOW_DOCTOR_GITHUB_REPO"],
@@ -53,11 +56,32 @@ _ENV_FALLBACKS: Dict[str, List[str]] = {
 
 
 def _env_fallback(key: str) -> Optional[str]:
-    """Return the first non-empty env var from the fallback chain for ``key``."""
-    for name in _ENV_FALLBACKS.get(key, []):
-        value = os.environ.get(name)
-        if value:
-            return value
+    """Resolve a credential field via the typed FLOW_DOCTOR_* settings contract.
+
+    Delegates to :class:`flow_doctor.core.settings.FlowDoctorSettings`
+    (pydantic-settings), which resolves ``key`` from — in precedence order —
+    the process environment (canonical ``FLOW_DOCTOR_*`` name then the
+    documented legacy aliases via ``AliasChoices``), a ``.env`` file
+    (``FLOW_DOCTOR_ENV_FILE``, default ``.env``), and a secrets directory
+    (``FLOW_DOCTOR_SECRETS_DIR``). Returns the first non-empty value, or None.
+
+    A fresh settings instance is built per call so values stay live (env set
+    after import, as tests do, is honoured). Resolution is cheap — a handful
+    of lookups at FlowDoctor init.
+    """
+    from flow_doctor.core.settings import FlowDoctorSettings
+
+    env_file = os.environ.get("FLOW_DOCTOR_ENV_FILE", ".env")
+    secrets_dir = os.environ.get("FLOW_DOCTOR_SECRETS_DIR") or None
+    try:
+        settings = FlowDoctorSettings(_env_file=env_file, _secrets_dir=secrets_dir)
+    except Exception:
+        # A malformed .env / unreadable secrets dir must not crash credential
+        # resolution — fall back to a plain-env settings instance.
+        settings = FlowDoctorSettings(_env_file=None, _secrets_dir=None)
+    value = getattr(settings, key, None)
+    if value is not None and str(value) != "":
+        return str(value)
     return None
 
 

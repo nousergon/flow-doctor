@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "flow-doctor"
-version = "0.6.0rc1"
+version = "0.6.0rc2"
 description = "Pipeline error handler: capture, deduplicate, diagnose, and auto-fix failures."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -43,6 +43,11 @@ classifiers = [
 dependencies = [
     "pyyaml>=6.0",
     "pydantic>=2.0",
+    # Typed FLOW_DOCTOR_* settings contract + .env / secrets-dir resolution
+    # (flow_doctor.core.settings). Light — pure Python on top of pydantic.
+    "pydantic-settings>=2.0",
+    # .env file parsing for pydantic-settings (Docker/compose self-host UX).
+    "python-dotenv>=1.0",
     # PEP 702 @deprecated backport for Python 3.9-3.12 (stdlib in 3.13+).
     "typing_extensions>=4.5",
 ]
