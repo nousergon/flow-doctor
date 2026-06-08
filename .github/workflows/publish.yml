@@ -1,0 +1,78 @@
+name: Publish to PyPI
+
+# Publishing triggers on every push to main and is idempotent via
+# skip-existing: a version bump in flow_doctor/__init__.py + pyproject.toml
+# auto-publishes on merge; an unchanged version is a no-op. This mirrors the
+# alpha-engine-lib / morning-signal / mnemon publish-on-main pattern and
+# eliminates the tag-triggered release.yml's "forgot to cut a tag" lapse that
+# left rc1/rc2/rc3 to be hand-uploaded via twine.
+#
+# OIDC Trusted Publishing — no API token in repo secrets. The PyPI side needs
+# a one-time Trusted Publisher entry registered at
+# https://pypi.org/manage/project/flow-doctor/settings/publishing/
+#   owner=cipher813, repo=flow-doctor, workflow=publish.yml, environment=pypi
+# Until that entry exists, the publish job fails with `invalid-publisher`.
+#
+# Companion workflow auto-tag.yml cuts the matching vX.Y.Z git tag on the
+# same push; version-bump-check.yml is the PR-time guard that ensures a
+# flow_doctor/** change carries a fresh version for both to act on.
+on:
+  push:
+    branches:
+      - main
+  # Manual fallback for re-publishing if a main-push event was missed.
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build sdist + wheel
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install build twine
+
+      - name: Build sdist + wheel
+        run: python -m build
+
+      - name: Verify artifacts with twine check
+        run: twine check dist/*
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    name: Publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    # OIDC trusted-publishing requires id-token: write at the job level.
+    # No PYPI_API_TOKEN secret is used — PyPI verifies the workflow identity.
+    permissions:
+      id-token: write
+    environment:
+      name: pypi
+      url: https://pypi.org/project/flow-doctor/
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          # Idempotent: an unchanged version (no bump this push) is skipped,
+          # not an error — so publish-on-every-main-push is safe.
+          skip-existing: true

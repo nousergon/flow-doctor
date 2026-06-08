@@ -1,0 +1,103 @@
+name: Version-bump check
+
+# On PRs that touch the package source under ``flow_doctor/**``, require a
+# ``pyproject.toml::version`` bump AND that the bumped version is not already
+# tagged. Without this, a public-surface change can merge with the version
+# unchanged, auto-tag.yml idempotently skips, publish.yml skips-existing, and
+# a consumer pinning the expected ``flow-doctor==X.Y.Z`` never gets the fix.
+# Mirrors the alpha-engine-lib version-bump-check pattern.
+#
+# Does NOT fire on PRs that only touch docs / tests / CI / README /
+# pyproject metadata — those legitimately don't bump the version.
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  version-bump-check:
+    name: pyproject version bumped for flow_doctor/ changes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect whether PR touches flow_doctor/**
+        id: detect
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "${GITHUB_BASE_REF}"
+          base="origin/${GITHUB_BASE_REF}"
+          changed=$(git diff --name-only "${base}...HEAD")
+          echo "Changed files vs ${base}:"
+          echo "${changed}" | sed 's/^/  /'
+          if echo "${changed}" | grep -qE '^flow_doctor/'; then
+            echo "src_touched=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "src_touched=false" >> "${GITHUB_OUTPUT}"
+            echo "PR does not touch flow_doctor/** — version-bump check skipped."
+          fi
+
+      - name: Read pyproject.toml versions (base vs PR)
+        id: versions
+        if: steps.detect.outputs.src_touched == 'true'
+        run: |
+          set -euo pipefail
+          base="origin/${GITHUB_BASE_REF}"
+          pr_version=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          git show "${base}:pyproject.toml" > /tmp/pyproject-base.toml
+          base_version=$(python -c "import tomllib; print(tomllib.load(open('/tmp/pyproject-base.toml','rb'))['project']['version'])")
+          echo "Base version (origin/${GITHUB_BASE_REF}): ${base_version}"
+          echo "PR version (HEAD): ${pr_version}"
+          echo "base_version=${base_version}" >> "${GITHUB_OUTPUT}"
+          echo "pr_version=${pr_version}" >> "${GITHUB_OUTPUT}"
+
+      - name: Require version bump for flow_doctor/** changes
+        if: steps.detect.outputs.src_touched == 'true'
+        env:
+          BASE_VERSION: ${{ steps.versions.outputs.base_version }}
+          PR_VERSION: ${{ steps.versions.outputs.pr_version }}
+        run: |
+          set -euo pipefail
+          if [ "${BASE_VERSION}" = "${PR_VERSION}" ]; then
+            cat >&2 <<EOF
+          ERROR: PR touches flow_doctor/** but pyproject.toml::version is unchanged.
+
+            base (origin/${GITHUB_BASE_REF}): ${BASE_VERSION}
+            PR (HEAD):                       ${PR_VERSION}
+
+          auto-tag.yml will idempotently skip an unchanged version and
+          publish.yml skip-existing, so a consumer pin to the expected
+          version never receives this change.
+
+          Fix: bump pyproject.toml::version AND flow_doctor/__init__.py::
+          __version__ (test_version_pin enforces lockstep) to a new, untagged
+          version.
+
+          Or, if the change is genuinely no-op for consumers (comment,
+          whitespace), split it into a separate non-src PR this guard skips.
+          EOF
+            exit 1
+          fi
+          echo "OK: pyproject.toml::version bumped ${BASE_VERSION} → ${PR_VERSION}"
+
+      - name: Require new version is not already tagged
+        if: steps.detect.outputs.src_touched == 'true'
+        env:
+          PR_VERSION: ${{ steps.versions.outputs.pr_version }}
+        run: |
+          set -euo pipefail
+          tag="v${PR_VERSION}"
+          git fetch --tags origin
+          if git tag --list | grep -Fxq "${tag}"; then
+            cat >&2 <<EOF
+          ERROR: pyproject.toml::version v${PR_VERSION} already exists as a tag.
+
+          auto-tag.yml will NOT re-tag an existing version, and publish.yml
+          will skip-existing — your bump will appear to succeed but ship
+          nothing. Bump to the next unused version
+          (check: git tag --list | sort -V | tail).
+          EOF
+            exit 1
+          fi
+          echo "OK: v${PR_VERSION} not yet tagged — auto-tag.yml will create it on merge."
