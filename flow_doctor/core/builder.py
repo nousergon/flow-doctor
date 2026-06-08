@@ -1,10 +1,10 @@
 """Typed fluent builder for ``FlowDoctor`` — no yaml required.
 
-The builder is the SOTA-facing replacement for ``flow_doctor.init()``.
-Each method returns ``self`` so calls chain, each accepts a typed
-Pydantic sub-config so IDE autocomplete and ``mypy --strict`` work
-end-to-end. ``init(config_path=...)`` keeps working for back-compat
-(see private/plug-and-play-260513.md Proposal 1).
+The builder is the recommended entry point. Each method returns ``self``
+so calls chain, each accepts a typed Pydantic sub-config so IDE
+autocomplete and ``mypy --strict`` work end-to-end. For yaml-driven
+configuration use ``FlowDoctor.from_config(config_path=...)`` (the
+supported replacement for the removed ``init()`` free function).
 """
 
 from __future__ import annotations

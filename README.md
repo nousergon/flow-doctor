@@ -2,8 +2,8 @@
 
 [![Python](https://img.shields.io/badge/python-3.9+-blue.svg)]()
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-394_passing-brightgreen.svg)]()
-[![PyPI](https://img.shields.io/badge/PyPI-v0.5.0-blue.svg)](https://pypi.org/project/flow-doctor/)
+[![Tests](https://img.shields.io/badge/tests-403_passing-brightgreen.svg)]()
+[![PyPI](https://img.shields.io/badge/PyPI-v0.6.0rc1-blue.svg)](https://pypi.org/project/flow-doctor/)
 [![Typed](https://img.shields.io/badge/typed-PEP_561-blue.svg)]()
 
 Pipeline error handler for Python. Captures exceptions, deduplicates failure signatures, optionally diagnoses root causes with LLMs, routes alerts (Telegram / Slack / email / GitHub / S3 / custom), and can generate fix PRs.
@@ -49,6 +49,8 @@ pip install "flow-doctor[all]"                   # everything
 ```
 
 Python 3.9+. Core install is dependency-light (pyyaml, pydantic v2, typing_extensions); each extra pulls only what that capability needs.
+
+> **0.6.0 is in its rc cycle.** `pip install flow-doctor` resolves to the latest stable (`0.5.0`); add `--pre` (e.g. `pip install --pre flow-doctor`) to pull `0.6.0rc1`, or pin `flow-doctor==0.6.0rc1`. **0.6.0 removes the deprecated `flow_doctor.init()`** — see [Migrating](#migrating).
 
 ## Quick Start — `FlowDoctor.builder()` (recommended)
 
@@ -102,6 +104,25 @@ import flow_doctor
 with flow_doctor.context(flow_name="morning-signal", stage="rank"):
     run_rank()  # any fd.report() inside auto-records flow_name + stage
 ```
+
+## Healthy completion + severity routing
+
+**`fd.notify_success(...)`** sends a success ping at `Severity.INFO` — for the "pipeline finished OK" signal, not just failures. It's persisted like any report but never triggers diagnosis or remediation, and reaches **only** notifiers that opt into `info` via **`notify_on`**:
+
+```python
+fd = (
+    FlowDoctor.builder("morning-signal")
+    # failures + success pings both go to this channel
+    .add_notifier(TelegramNotifierConfig(notify_on=["critical", "error", "info"]))
+    .build()
+)
+
+with fd.guard():
+    run_pipeline()
+fd.notify_success("morning-signal done", body="42 stories, 3 searches")
+```
+
+`notify_on` is per-notifier. When unset it defaults to `{critical, error}` (warnings and info are skipped), so existing failure-only channels are unaffected. Use it to fan failures to one channel and success/warnings to another. An async `notify_success_async(...)` mirrors `report_async`.
 
 ## Notifier configs (typed)
 
@@ -264,8 +285,9 @@ auto_fix:
 ```
 
 ```python
-# Deprecated since 0.5.0; will be removed in 0.6.0. Use FlowDoctor.builder() instead.
-fd = flow_doctor.init(config_path="flow-doctor.yaml")
+from flow_doctor import FlowDoctor
+
+fd = FlowDoctor.from_config(config_path="flow-doctor.yaml")
 ```
 
 `${VAR}` references resolve from the process environment at load time. **Unresolved references raise `ConfigError`** — no silent passthrough.
@@ -309,7 +331,7 @@ fd = FlowDoctor.builder("pipeline").add_notifier(TelegramNotifierConfig()).build
 
 ### Strict mode and degraded mode
 
-`FlowDoctor.builder().build()` and `flow_doctor.init()` both default to `strict=True`. Any configuration error (missing required field, unresolved `${VAR}`, unknown notifier type) raises `ConfigError` and prevents startup. This is the recommended default — a non-running flow-doctor is a loud failure; a silently-degraded flow-doctor is a silent one.
+`FlowDoctor.builder().build()` and `FlowDoctor.from_config()` both default to `strict=True`. Any configuration error (missing required field, unresolved `${VAR}`, unknown notifier type) raises `ConfigError` and prevents startup. This is the recommended default — a non-running flow-doctor is a loud failure; a silently-degraded flow-doctor is a silent one.
 
 If you genuinely want best-effort init that logs errors but keeps running with no notifiers, opt in explicitly:
 
@@ -380,10 +402,23 @@ with fd.capture_logs(level=logging.INFO):
 
 ### Auto-Fix PRs
 
-Human-in-the-loop: a human reviews a filed issue's diagnosis, adds a `flow-doctor:fix` label, and a GitHub Actions workflow generates a validated fix PR.
+Both halves are independently toggleable on the GitHub notifier:
+
+```python
+GitHubNotifierConfig(
+    repo="me/app",
+    auto_create_issue=True,   # toggle 1: file an issue on failure (default True)
+    auto_fix_pr=False,        # toggle 2: auto-generate a fix PR for it (default False)
+)
+```
+
+- **`auto_create_issue`** (default `True`) — file a GitHub issue on failure. Set `False` to silence issue creation without removing the notifier block.
+- **`auto_fix_pr`** (default `False`) — when `True`, Flow Doctor applies the `fix_label` (`flow-doctor:fix`) to each filed issue, which fires the fix workflow automatically with **no human label step**. Leave `False` for the human-in-the-loop default below.
+
+The fix-generation pipeline itself is the same either way:
 
 1. An error occurs and Flow Doctor creates a GitHub issue with structured diagnosis
-2. A human reviews the diagnosis and adds the `flow-doctor:fix` label
+2. The `flow-doctor:fix` label is applied — by a human (default) or automatically (`auto_fix_pr=True`)
 3. GitHub Actions triggers `flow-doctor generate-fix`
 4. The CLI generates a diff via LLM, validates against scope rules, runs tests
 5. If tests pass, a PR is opened. If tests fail, a comment explains what went wrong.
@@ -458,15 +493,18 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 ```
 
-## Migrating from 0.4.x
+<a name="migrating"></a>
 
-`flow_doctor.init(config_path=...)` and direct construction of `NotifyChannelConfig` are both `@deprecated` (PEP 702) in 0.5.0. Both still work — they'll be removed in 0.6.0. Migration:
+## Migrating to 0.6.0
+
+`flow_doctor.init()` was **removed** in 0.6.0 (it was `@deprecated` through 0.5.x). Two drop-in replacements:
 
 ```python
-# 0.4.x — still works in 0.5.x, but mypy/pyright will flag it
-fd = flow_doctor.init(config_path="flow-doctor.yaml")
+# was: fd = flow_doctor.init(config_path="flow-doctor.yaml")
+# now, same yaml + kwargs contract:
+fd = FlowDoctor.from_config(config_path="flow-doctor.yaml")
 
-# 0.5.x — typed, IDE-discoverable, no yaml
+# or the typed, IDE-discoverable builder (no yaml):
 fd = (
     FlowDoctor.builder("pipeline")
     .add_notifier(TelegramNotifierConfig())
@@ -474,7 +512,7 @@ fd = (
 )
 ```
 
-The 0.5.x yaml shim is API-compatible with 0.4.x configs; existing yaml files keep working through the deprecation window.
+Existing `flow-doctor.yaml` files keep working unchanged via `from_config`. The omnibus `NotifyChannelConfig` is no longer a public/deprecated surface — construct typed `*NotifierConfig` objects from `flow_doctor.notify` instead.
 
 ## Architecture
 
@@ -503,7 +541,7 @@ cd flow-doctor
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev,diagnosis]"
 
-python -m pytest tests/ -x -q                          # 394 tests
+python -m pytest tests/ -x -q                          # 403 tests
 python -m coverage run -m pytest && python -m coverage report  # coverage
 python examples/smoke_test.py              # end-to-end smoke test
 ```

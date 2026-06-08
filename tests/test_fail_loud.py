@@ -13,7 +13,7 @@ import tempfile
 
 import pytest
 
-from flow_doctor import ConfigError, init
+from flow_doctor import ConfigError, FlowDoctor
 from flow_doctor.core.config import _resolve_env_vars, load_config
 
 
@@ -106,12 +106,12 @@ notify:
 
 
 # ──────────────────────────────────────────────────────────────────────
-# Missing notifier credentials raise ConfigError at init() time
+# Missing notifier credentials raise ConfigError at FlowDoctor.from_config() time
 # ──────────────────────────────────────────────────────────────────────
 def test_github_notifier_missing_token_raises(sqlite_store):
     """github notifier with repo but no token should raise ConfigError."""
     with pytest.raises(ConfigError) as exc_info:
-        init(
+        FlowDoctor.from_config(
             flow_name="test",
             store=sqlite_store,
             notify=[{"type": "github", "repo": "owner/repo"}],
@@ -124,7 +124,7 @@ def test_github_notifier_missing_token_raises(sqlite_store):
 def test_github_notifier_missing_repo_raises(sqlite_store):
     """github notifier with token but no repo should raise ConfigError."""
     with pytest.raises(ConfigError) as exc_info:
-        init(
+        FlowDoctor.from_config(
             flow_name="test",
             store=sqlite_store,
             notify=[{"type": "github", "token": "ghp_xyz"}],
@@ -135,7 +135,7 @@ def test_github_notifier_missing_repo_raises(sqlite_store):
 def test_slack_notifier_missing_webhook_raises(sqlite_store):
     """slack notifier without webhook_url should raise ConfigError."""
     with pytest.raises(ConfigError) as exc_info:
-        init(
+        FlowDoctor.from_config(
             flow_name="test",
             store=sqlite_store,
             notify=[{"type": "slack", "channel": "#alerts"}],
@@ -148,7 +148,7 @@ def test_slack_notifier_missing_webhook_raises(sqlite_store):
 def test_email_notifier_missing_sender_raises(sqlite_store):
     """email notifier missing sender should raise ConfigError naming the field."""
     with pytest.raises(ConfigError) as exc_info:
-        init(
+        FlowDoctor.from_config(
             flow_name="test",
             store=sqlite_store,
             notify=[{"type": "email", "recipients": "x@example.com"}],
@@ -160,7 +160,7 @@ def test_email_notifier_missing_sender_raises(sqlite_store):
 def test_email_notifier_missing_recipients_raises(sqlite_store):
     """email notifier missing recipients should raise ConfigError."""
     with pytest.raises(ConfigError) as exc_info:
-        init(
+        FlowDoctor.from_config(
             flow_name="test",
             store=sqlite_store,
             notify=[{"type": "email", "sender": "alerts@example.com"}],
@@ -171,7 +171,7 @@ def test_email_notifier_missing_recipients_raises(sqlite_store):
 def test_unknown_notifier_type_raises(sqlite_store):
     """An unknown notifier type should raise ConfigError."""
     with pytest.raises(ConfigError) as exc_info:
-        init(
+        FlowDoctor.from_config(
             flow_name="test",
             store=sqlite_store,
             notify=[{"type": "carrier_pigeon"}],
@@ -185,7 +185,7 @@ def test_unknown_notifier_type_raises(sqlite_store):
 def test_github_token_from_flow_doctor_env(monkeypatch, sqlite_store):
     """FLOW_DOCTOR_GITHUB_TOKEN should satisfy a github notifier missing token."""
     monkeypatch.setenv("FLOW_DOCTOR_GITHUB_TOKEN", "ghp_fallback_123")
-    fd = init(
+    fd = FlowDoctor.from_config(
         flow_name="test",
         store=sqlite_store,
         notify=[{"type": "github", "repo": "owner/repo"}],
@@ -197,7 +197,7 @@ def test_github_token_from_flow_doctor_env(monkeypatch, sqlite_store):
 def test_github_token_from_gh_token_convention(monkeypatch, sqlite_store):
     """GH_TOKEN (gh CLI convention) should satisfy a github notifier."""
     monkeypatch.setenv("GH_TOKEN", "ghp_gh_cli")
-    fd = init(
+    fd = FlowDoctor.from_config(
         flow_name="test",
         store=sqlite_store,
         notify=[{"type": "github", "repo": "owner/repo"}],
@@ -208,7 +208,7 @@ def test_github_token_from_gh_token_convention(monkeypatch, sqlite_store):
 def test_github_token_from_github_token_convention(monkeypatch, sqlite_store):
     """GITHUB_TOKEN (GitHub Actions convention) should satisfy a github notifier."""
     monkeypatch.setenv("GITHUB_TOKEN", "ghp_actions")
-    fd = init(
+    fd = FlowDoctor.from_config(
         flow_name="test",
         store=sqlite_store,
         notify=[{"type": "github", "repo": "owner/repo"}],
@@ -222,7 +222,7 @@ def test_github_token_flow_doctor_takes_precedence_over_gh_token(
     """FLOW_DOCTOR_GITHUB_TOKEN should win over GH_TOKEN when both are set."""
     monkeypatch.setenv("FLOW_DOCTOR_GITHUB_TOKEN", "primary")
     monkeypatch.setenv("GH_TOKEN", "fallback")
-    fd = init(
+    fd = FlowDoctor.from_config(
         flow_name="test",
         store=sqlite_store,
         notify=[{"type": "github", "repo": "owner/repo"}],
@@ -233,7 +233,7 @@ def test_github_token_flow_doctor_takes_precedence_over_gh_token(
 def test_explicit_token_takes_precedence_over_env(monkeypatch, sqlite_store):
     """A token set in notify config should win over env vars."""
     monkeypatch.setenv("FLOW_DOCTOR_GITHUB_TOKEN", "from_env")
-    fd = init(
+    fd = FlowDoctor.from_config(
         flow_name="test",
         store=sqlite_store,
         notify=[
@@ -247,7 +247,7 @@ def test_github_repo_from_env(monkeypatch, sqlite_store):
     """FLOW_DOCTOR_GITHUB_REPO should satisfy a github notifier missing repo."""
     monkeypatch.setenv("FLOW_DOCTOR_GITHUB_REPO", "env/repo")
     monkeypatch.setenv("FLOW_DOCTOR_GITHUB_TOKEN", "ghp_xyz")
-    fd = init(
+    fd = FlowDoctor.from_config(
         flow_name="test",
         store=sqlite_store,
         notify=[{"type": "github"}],
@@ -260,7 +260,7 @@ def test_slack_webhook_from_flow_doctor_env(monkeypatch, sqlite_store):
     monkeypatch.setenv(
         "FLOW_DOCTOR_SLACK_WEBHOOK", "https://hooks.slack.com/services/XXX"
     )
-    fd = init(
+    fd = FlowDoctor.from_config(
         flow_name="test",
         store=sqlite_store,
         notify=[{"type": "slack"}],
@@ -273,7 +273,7 @@ def test_slack_webhook_from_legacy_env(monkeypatch, sqlite_store):
     monkeypatch.setenv(
         "SLACK_WEBHOOK_URL", "https://hooks.slack.com/services/LEGACY"
     )
-    fd = init(
+    fd = FlowDoctor.from_config(
         flow_name="test",
         store=sqlite_store,
         notify=[{"type": "slack"}],
@@ -284,7 +284,7 @@ def test_slack_webhook_from_legacy_env(monkeypatch, sqlite_store):
 def test_email_password_from_flow_doctor_env(monkeypatch, sqlite_store):
     """FLOW_DOCTOR_SMTP_PASSWORD should be picked up for email notifier."""
     monkeypatch.setenv("FLOW_DOCTOR_SMTP_PASSWORD", "app_password_xyz")
-    fd = init(
+    fd = FlowDoctor.from_config(
         flow_name="test",
         store=sqlite_store,
         notify=[
@@ -303,7 +303,7 @@ def test_email_sender_and_recipients_from_env(monkeypatch, sqlite_store):
     monkeypatch.setenv("EMAIL_SENDER", "alerts@example.com")
     monkeypatch.setenv("EMAIL_RECIPIENTS", "oncall@example.com")
     monkeypatch.setenv("FLOW_DOCTOR_SMTP_PASSWORD", "pw")
-    fd = init(
+    fd = FlowDoctor.from_config(
         flow_name="test",
         store=sqlite_store,
         notify=[{"type": "email"}],
@@ -316,7 +316,7 @@ def test_email_sender_and_recipients_from_env(monkeypatch, sqlite_store):
 # ──────────────────────────────────────────────────────────────────────
 def test_strict_false_swallows_init_errors(sqlite_store):
     """strict=False should suppress ConfigError and run in degraded mode."""
-    fd = init(
+    fd = FlowDoctor.from_config(
         flow_name="test",
         store=sqlite_store,
         notify=[{"type": "github", "repo": "owner/repo"}],  # missing token
@@ -329,7 +329,7 @@ def test_strict_false_swallows_init_errors(sqlite_store):
 def test_strict_true_is_default(sqlite_store):
     """The default (no strict kwarg) should raise on misconfiguration."""
     with pytest.raises(ConfigError):
-        init(
+        FlowDoctor.from_config(
             flow_name="test",
             store=sqlite_store,
             notify=[{"type": "github", "repo": "owner/repo"}],
@@ -341,7 +341,7 @@ def test_strict_true_is_default(sqlite_store):
 # ──────────────────────────────────────────────────────────────────────
 def test_github_notifier_full_config_succeeds(sqlite_store):
     """A fully-specified github notifier should init cleanly."""
-    fd = init(
+    fd = FlowDoctor.from_config(
         flow_name="test",
         store=sqlite_store,
         notify=[
@@ -363,7 +363,7 @@ def test_env_var_only_quickstart(monkeypatch, sqlite_store):
     """The README env-var-only quickstart should work end-to-end."""
     monkeypatch.setenv("FLOW_DOCTOR_GITHUB_REPO", "cipher813/test")
     monkeypatch.setenv("FLOW_DOCTOR_GITHUB_TOKEN", "ghp_env_only")
-    fd = init(
+    fd = FlowDoctor.from_config(
         flow_name="env-only-test",
         store=sqlite_store,
         notify=[{"type": "github"}],

@@ -25,7 +25,7 @@ class FlowDoctorHandler(logging.Handler):
 
     Usage::
 
-        fd = flow_doctor.init(...)
+        fd = FlowDoctor.builder("pipeline").add_notifier(...).build()
         handler = FlowDoctorHandler(fd)
         logging.getLogger().addHandler(handler)
     """

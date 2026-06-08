@@ -30,6 +30,12 @@ TelegramChatId = Union[int, str]
 class _NotifierConfigBase(BaseModel):
     model_config = ConfigDict(extra="ignore", validate_assignment=False)
 
+    # Per-notifier severity routing, shared by every channel. When None,
+    # the dispatcher applies the default set {critical, error}. Set e.g.
+    # ["critical", "error", "info"] to also receive healthy-completion
+    # pings (notify_success) on this channel.
+    notify_on: Optional[List[str]] = None
+
 
 class SlackNotifierConfig(_NotifierConfigBase):
     type: Literal["slack"] = "slack"
@@ -39,6 +45,7 @@ class SlackNotifierConfig(_NotifierConfigBase):
     def to_channel_config(self) -> NotifyChannelConfig:
         return NotifyChannelConfig(
             type="slack",
+            notify_on=self.notify_on,
             webhook_url=self.webhook_url,
             channel=self.channel,
         )
@@ -70,6 +77,7 @@ class EmailNotifierConfig(_NotifierConfigBase):
     def to_channel_config(self) -> NotifyChannelConfig:
         return NotifyChannelConfig(
             type="email",
+            notify_on=self.notify_on,
             sender=self.sender,
             recipients=self.recipients,  # already CSV after the validator
             smtp_host=self.smtp_host,
@@ -83,13 +91,26 @@ class GitHubNotifierConfig(_NotifierConfigBase):
     repo: Optional[str] = None
     token: Optional[str] = None
     labels: Optional[List[str]] = None
+    # Toggle 1 — auto-create a GitHub issue on failure. When False, this
+    # notifier files no issue (skipped at init). Default True.
+    auto_create_issue: bool = True
+    # Toggle 2 — auto-create a fix PR for the filed issue. When True, the
+    # notifier applies ``fix_label`` to the new issue, firing the
+    # flow-doctor-fix Actions workflow (LLM diff -> scope guard -> test
+    # gate -> PR) with no human label step. Default False.
+    auto_fix_pr: bool = False
+    fix_label: str = "flow-doctor:fix"
 
     def to_channel_config(self) -> NotifyChannelConfig:
         return NotifyChannelConfig(
             type="github",
+            notify_on=self.notify_on,
             repo=self.repo,
             token=self.token,
             labels=self.labels,
+            auto_create_issue=self.auto_create_issue,
+            auto_fix_pr=self.auto_fix_pr,
+            fix_label=self.fix_label,
         )
 
 
@@ -104,6 +125,7 @@ class S3NotifierConfig(_NotifierConfigBase):
     def to_channel_config(self) -> NotifyChannelConfig:
         return NotifyChannelConfig(
             type="s3",
+            notify_on=self.notify_on,
             bucket=self.bucket,
             subsystem=self.subsystem,
             entry_prefix=self.entry_prefix,
@@ -140,6 +162,7 @@ class TelegramNotifierConfig(_NotifierConfigBase):
     def to_channel_config(self) -> NotifyChannelConfig:
         return NotifyChannelConfig(
             type="telegram",
+            notify_on=self.notify_on,
             bot_token=self.bot_token,
             chat_id=self.chat_id,
             message_thread_id=self.message_thread_id,

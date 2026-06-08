@@ -306,9 +306,9 @@ def test_format_iso_utc_aware_datetime():
 
 def test_init_dispatches_s3_notifier(monkeypatch):
     """Test the elif nc.type == 's3' branch in client.py builds an S3Notifier."""
-    from flow_doctor import init
+    from flow_doctor import FlowDoctor
     monkeypatch.setenv("FLOW_DOCTOR_SKIP_PREFLIGHT", "1")
-    fd = init(
+    fd = FlowDoctor.from_config(
         notify=[{"type": "s3", "bucket": "test-bucket", "subsystem": "data_pipeline"}],
         store={"type": "sqlite", "path": ":memory:"},
         strict=False,
@@ -320,10 +320,10 @@ def test_init_dispatches_s3_notifier(monkeypatch):
 
 
 def test_init_rejects_s3_without_required_fields(monkeypatch):
-    from flow_doctor import init
+    from flow_doctor import FlowDoctor
     monkeypatch.setenv("FLOW_DOCTOR_SKIP_PREFLIGHT", "1")
     with pytest.raises(ConfigError) as exc:
-        init(
+        FlowDoctor.from_config(
             notify=[{"type": "s3"}],  # missing bucket + subsystem
             store={"type": "sqlite", "path": ":memory:"},
         )
@@ -332,10 +332,10 @@ def test_init_rejects_s3_without_required_fields(monkeypatch):
 
 
 def test_init_picks_bucket_from_env(monkeypatch):
-    from flow_doctor import init
+    from flow_doctor import FlowDoctor
     monkeypatch.setenv("FLOW_DOCTOR_SKIP_PREFLIGHT", "1")
     monkeypatch.setenv("CHANGELOG_BUCKET", "env-bucket")
-    fd = init(
+    fd = FlowDoctor.from_config(
         notify=[{"type": "s3", "subsystem": "executor"}],
         store={"type": "sqlite", "path": ":memory:"},
         strict=False,

@@ -17,7 +17,6 @@ import pytest
 from flow_doctor import (
     FlowDoctor,
     TelegramNotifierConfig,
-    init,
 )
 from flow_doctor.core.config import NotifyChannelConfig
 from flow_doctor.core.errors import ConfigError
@@ -96,7 +95,7 @@ def test_init_rejects_telegram_without_bot_token_or_chat_id(monkeypatch):
     monkeypatch.delenv("TELEGRAM_CHAT_ID", raising=False)
     with tempfile.NamedTemporaryFile(suffix=".db") as f:
         with pytest.raises(ConfigError) as exc:
-            init(
+            FlowDoctor.from_config(
                 store={"type": "sqlite", "path": f.name},
                 notify=[{"type": "telegram"}],
             )
@@ -112,7 +111,7 @@ def test_init_picks_telegram_creds_from_env(monkeypatch):
     monkeypatch.setenv("FLOW_DOCTOR_TELEGRAM_BOT_TOKEN", "123:env-token")
     monkeypatch.setenv("FLOW_DOCTOR_TELEGRAM_CHAT_ID", "-1001234567890")
     with tempfile.NamedTemporaryFile(suffix=".db") as f:
-        fd = init(
+        fd = FlowDoctor.from_config(
             store={"type": "sqlite", "path": f.name},
             notify=[{"type": "telegram"}],
         )
@@ -127,7 +126,7 @@ def test_init_keeps_at_channel_chat_id_as_string(monkeypatch):
     monkeypatch.setenv("FLOW_DOCTOR_TELEGRAM_BOT_TOKEN", "t")
     monkeypatch.setenv("FLOW_DOCTOR_TELEGRAM_CHAT_ID", "@my_channel")
     with tempfile.NamedTemporaryFile(suffix=".db") as f:
-        fd = init(
+        fd = FlowDoctor.from_config(
             store={"type": "sqlite", "path": f.name},
             notify=[{"type": "telegram"}],
         )
@@ -284,7 +283,7 @@ def test_send_notifications_dispatches_to_telegram_action_type(monkeypatch):
     monkeypatch.setenv("FLOW_DOCTOR_TELEGRAM_CHAT_ID", "1")
 
     with tempfile.NamedTemporaryFile(suffix=".db") as f:
-        fd = init(
+        fd = FlowDoctor.from_config(
             store={"type": "sqlite", "path": f.name},
             notify=[{"type": "telegram"}],
         )
@@ -331,7 +330,7 @@ def test_successful_dispatch_emits_info_log_line(monkeypatch, caplog):
     monkeypatch.setenv("FLOW_DOCTOR_TELEGRAM_CHAT_ID", "1")
 
     with tempfile.NamedTemporaryFile(suffix=".db") as f:
-        fd = init(
+        fd = FlowDoctor.from_config(
             store={"type": "sqlite", "path": f.name},
             notify=[{"type": "telegram"}],
         )

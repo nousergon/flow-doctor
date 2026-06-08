@@ -1,4 +1,4 @@
-"""FlowDoctor client: init(), report(), guard(), monitor(), capture_logs()."""
+"""FlowDoctor client: from_config(), report(), notify_success(), guard(), monitor()."""
 
 from __future__ import annotations
 
@@ -10,9 +10,7 @@ import sys
 import traceback as tb_module
 from contextlib import contextmanager
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
-
-from typing_extensions import deprecated
+from typing import TYPE_CHECKING, Any, Callable, Dict, FrozenSet, List, Optional
 
 if TYPE_CHECKING:
     from flow_doctor.core.builder import FlowDoctorBuilder
@@ -63,6 +61,25 @@ def _env_fallback(key: str) -> Optional[str]:
     return None
 
 
+# Default per-notifier severity routing: critical + error are alerted,
+# warnings + info are NOT (info is the healthy-completion ping, opt-in
+# only). A notifier overrides this via its config's ``notify_on``.
+_DEFAULT_NOTIFY_ON: FrozenSet[str] = frozenset(
+    {Severity.CRITICAL.value, Severity.ERROR.value}
+)
+
+
+def _normalize_notify_on(raw: Optional[List[str]]) -> Optional[FrozenSet[str]]:
+    """Normalize a config ``notify_on`` list into a severity set, or None.
+
+    None / empty preserves the default routing. Values are lower-cased and
+    stripped so ``["ERROR", " info "]`` works.
+    """
+    if not raw:
+        return None
+    return frozenset(str(s).strip().lower() for s in raw if str(s).strip())
+
+
 class _LogCaptureHandler(logging.Handler):
     """Non-propagating handler that buffers log records."""
 
@@ -107,6 +124,37 @@ class FlowDoctor:
         from flow_doctor.core.builder import FlowDoctorBuilder
 
         return FlowDoctorBuilder(flow_name)
+
+    @classmethod
+    def from_config(
+        cls,
+        config_path: Optional[str] = None,
+        *,
+        strict: bool = True,
+        **kwargs: Any,
+    ) -> "FlowDoctor":
+        """Construct a ``FlowDoctor`` from a yaml file and/or inline kwargs.
+
+        The supported yaml entry point (replaces the removed
+        ``flow_doctor.init()`` free function as of 0.6.0). Prefer
+        :meth:`builder` for new code — it's typed and needs no yaml — but
+        ``from_config`` is the right tool when configuration is owned by a
+        ``flow-doctor.yaml`` file (multi-environment / ops-managed installs).
+
+        Args:
+            config_path: Path to a ``flow-doctor.yaml``. Optional — all
+                settings can come from ``FLOW_DOCTOR_*`` env vars and/or
+                ``**kwargs`` instead.
+            strict: If True (default), any config / init error raises. If
+                False, errors are logged and flow-doctor runs degraded.
+            **kwargs: Inline config overrides (flow_name, repo, notify, ...).
+
+        Raises:
+            ConfigError: On invalid config, a missing required notifier
+                field, or an unresolved ``${VAR}`` — only when ``strict``.
+        """
+        config = load_config(config_path=config_path, **kwargs)
+        return cls(config, strict=strict)
 
     def __init__(self, config: FlowDoctorConfig, *, strict: bool = True):
         """Initialize a FlowDoctor instance.
@@ -194,6 +242,7 @@ class FlowDoctor:
         notifiers: List[Notifier] = []
         for idx, nc in enumerate(config.notify):
             label = f"notify[{idx}] (type={nc.type})"
+            before = len(notifiers)
 
             if nc.type == "slack":
                 webhook = nc.webhook_url or _env_fallback("slack_webhook")
@@ -234,6 +283,11 @@ class FlowDoctor:
                 ))
 
             elif nc.type == "github":
+                # Auto-issue toggle: when off, skip building this notifier
+                # entirely so it files no issue (and never counts toward
+                # dispatch attempts). The config block can stay in place.
+                if not getattr(nc, "auto_create_issue", True):
+                    continue
                 repo = nc.repo or config.repo or _env_fallback("github_repo")
                 token = (
                     nc.token
@@ -257,7 +311,13 @@ class FlowDoctor:
                     )
                 from flow_doctor.notify.github import GitHubNotifier
                 labels = nc.labels or (config.github.labels if config.github else ["flow-doctor"])
-                notifiers.append(GitHubNotifier(repo=repo, token=token, labels=labels))
+                notifiers.append(GitHubNotifier(
+                    repo=repo,
+                    token=token,
+                    labels=labels,
+                    auto_fix_pr=getattr(nc, "auto_fix_pr", False),
+                    fix_label=getattr(nc, "fix_label", "flow-doctor:fix"),
+                ))
 
             elif nc.type == "s3":
                 bucket = nc.bucket or _env_fallback("s3_bucket")
@@ -335,6 +395,14 @@ class FlowDoctor:
                 raise ConfigError(
                     f"{label}: unknown notifier type '{nc.type}'. "
                     f"Supported types: slack, email, github, s3, telegram."
+                )
+
+            # Stamp the per-notifier severity routing onto whatever was just
+            # built this iteration (the github auto_create_issue=False branch
+            # ``continue``s without appending, so guard on the count).
+            if len(notifiers) > before:
+                notifiers[-1].notify_on = _normalize_notify_on(
+                    getattr(nc, "notify_on", None)
                 )
 
         return notifiers
@@ -447,6 +515,76 @@ class FlowDoctor:
         except Exception as exc:
             # report() must NEVER crash the caller
             print(f"[flow-doctor] Internal error in report(): {exc}", file=sys.stderr)
+            return None
+
+    def notify_success(
+        self,
+        subject: str,
+        body: Optional[str] = None,
+        *,
+        context: Optional[Dict[str, Any]] = None,
+    ) -> Optional[str]:
+        """Send a healthy-completion / success ping (``Severity.INFO``).
+
+        The public success-path API (since 0.6.0) — closes the gap that
+        previously forced consumers to reach into ``fd._notifiers`` to send
+        a "pipeline finished OK" message. The ping is persisted like any
+        report and routed through the normal notifier dispatch, but at
+        ``INFO`` severity it never triggers dedup, diagnosis, or
+        remediation, and reaches ONLY notifiers whose ``notify_on`` includes
+        ``"info"`` (e.g. ``TelegramNotifierConfig(notify_on=["critical",
+        "error", "info"])``). Channels left on the default routing are
+        unaffected — no success spam on your failure-only channels.
+
+        Args:
+            subject: Short success headline (becomes the message body's lead).
+            body: Optional detail text (rendered like attached logs).
+            context: Arbitrary key-value metadata.
+
+        Returns:
+            The report ID, or None on internal error. Never raises.
+        """
+        try:
+            enriched_context = self._build_context(context)
+            report = Report(
+                flow_name=self.config.flow_name,
+                severity=Severity.INFO.value,
+                error_message=subject,
+                logs=body,
+                context=enriched_context,
+            )
+            if self._store:
+                self._store.save_report(report)
+            self._send_notifications(report, is_cascade=False, diagnosis=None)
+            return report.id
+        except Exception as exc:
+            print(f"[flow-doctor] notify_success() error: {exc}", file=sys.stderr)
+            return None
+
+    async def notify_success_async(
+        self,
+        subject: str,
+        body: Optional[str] = None,
+        *,
+        context: Optional[Dict[str, Any]] = None,
+    ) -> Optional[str]:
+        """Async counterpart of :meth:`notify_success`.
+
+        Offloads the sync persist / notify work to a thread so an async
+        caller's event loop stays unblocked; the current ``flow_doctor
+        .context()`` scope propagates via ``contextvars``.
+        """
+        import asyncio
+
+        try:
+            return await asyncio.to_thread(
+                self.notify_success, subject, body, context=context
+            )
+        except Exception as exc:
+            print(
+                f"[flow-doctor] notify_success_async() error: {exc}",
+                file=sys.stderr,
+            )
             return None
 
     async def report_async(
@@ -764,15 +902,23 @@ class FlowDoctor:
         CRITICAL is emitted if *all* notifiers failed for this report,
         which is the "flow-doctor itself is broken" signal users most
         need to see.
-        """
-        # Warnings don't trigger alerts by default
-        if report.severity == Severity.WARNING.value:
-            return
 
+        Severity routing is per-notifier: each notifier receives this report
+        only if ``report.severity`` is in its effective ``notify_on`` set
+        (its config's ``notify_on``, or the default {critical, error}). So
+        warnings and healthy-completion ``info`` pings reach only the
+        channels that explicitly opt in, while critical/error still fan out
+        everywhere by default. A notifier skipped by severity does not count
+        toward attempted/failed — it intentionally isn't a recipient.
+        """
         attempted = 0
         failed: List[str] = []
 
         for notifier in self._notifiers:
+            effective_notify_on = notifier.notify_on or _DEFAULT_NOTIFY_ON
+            if report.severity not in effective_notify_on:
+                continue
+
             from flow_doctor.notify.slack import SlackNotifier
             from flow_doctor.notify.email import EmailNotifier
             from flow_doctor.notify.github import GitHubNotifier
@@ -1054,40 +1200,3 @@ class FlowDoctor:
         except Exception as e:
             print(f"[flow-doctor] digest() error: {e}", file=sys.stderr)
             return None
-
-
-@deprecated(
-    "flow_doctor.init() is deprecated; use FlowDoctor.builder() for typed, "
-    "IDE-discoverable configuration. The yaml shim will be removed in 0.6.0."
-)
-def init(
-    config_path: Optional[str] = None,
-    *,
-    strict: bool = True,
-    **kwargs: Any,
-) -> FlowDoctor:
-    """Initialize Flow Doctor.
-
-    Args:
-        config_path: Path to a flow-doctor.yaml config file. Optional —
-            flow-doctor can run with zero config files if all required
-            settings are provided via FLOW_DOCTOR_* environment variables
-            and/or ``**kwargs``.
-        strict: If True (default), any configuration or initialization
-            error raises immediately. If False, errors are logged and
-            flow-doctor runs in degraded mode with no notifiers. Strict
-            mode is the default because silent degradation defeats the
-            purpose of an error-monitoring tool.
-        **kwargs: Inline config overrides (flow_name, repo, owner, notify,
-            store, etc.)
-
-    Returns:
-        A configured FlowDoctor instance.
-
-    Raises:
-        ConfigError: When config is invalid, a notifier is missing required
-            fields, or a ``${VAR}`` reference cannot be resolved. Only
-            raised when ``strict=True`` (the default).
-    """
-    config = load_config(config_path=config_path, **kwargs)
-    return FlowDoctor(config, strict=strict)
