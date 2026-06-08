@@ -4,15 +4,31 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "flow-doctor"
-version = "0.5.0rc3"
+version = "0.5.0"
 description = "Pipeline error handler: capture, deduplicate, diagnose, and auto-fix failures."
 readme = "README.md"
 requires-python = ">=3.9"
 license = {file = "LICENSE"}
 authors = [{name = "Brian McMahon"}]
-keywords = ["error-handling", "pipeline", "monitoring", "diagnosis", "auto-fix", "llm"]
+keywords = [
+    "error-handling",
+    "error-monitoring",
+    "exception-handling",
+    "observability",
+    "monitoring",
+    "alerting",
+    "pipeline",
+    "diagnosis",
+    "auto-fix",
+    "llm",
+    "anthropic",
+    "claude",
+    "telegram",
+    "slack",
+    "self-hosted",
+]
 classifiers = [
-    "Development Status :: 4 - Beta",
+    "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
@@ -48,6 +64,7 @@ dev = [
 Homepage = "https://github.com/cipher813/flow-doctor"
 Repository = "https://github.com/cipher813/flow-doctor"
 Issues = "https://github.com/cipher813/flow-doctor/issues"
+Changelog = "https://github.com/cipher813/flow-doctor/blob/main/CHANGELOG.md"
 
 [project.scripts]
 flow-doctor = "flow_doctor.fix.cli:main"

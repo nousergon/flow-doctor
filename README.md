@@ -2,8 +2,8 @@
 
 [![Python](https://img.shields.io/badge/python-3.9+-blue.svg)]()
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-376_passing-brightgreen.svg)]()
-[![PyPI](https://img.shields.io/badge/PyPI-v0.5.0rc2-blue.svg)](https://pypi.org/project/flow-doctor/)
+[![Tests](https://img.shields.io/badge/tests-394_passing-brightgreen.svg)]()
+[![PyPI](https://img.shields.io/badge/PyPI-v0.5.0-blue.svg)](https://pypi.org/project/flow-doctor/)
 [![Typed](https://img.shields.io/badge/typed-PEP_561-blue.svg)]()
 
 Pipeline error handler for Python. Captures exceptions, deduplicates failure signatures, optionally diagnoses root causes with LLMs, routes alerts (Telegram / Slack / email / GitHub / S3 / custom), and can generate fix PRs.
@@ -41,16 +41,14 @@ Exception → Capture → Dedup → Diagnose (LLM, opt) → Notify (Telegram/...
 
 ## Installation
 
-While 0.5.0 is in the rc cycle:
-
 ```bash
-pip install --pre flow-doctor                          # core only
-pip install --pre "flow-doctor[diagnosis]"             # + LLM diagnosis (anthropic SDK)
-pip install --pre "flow-doctor[diagnosis,remediation]" # + auto-remediation (boto3)
-pip install --pre "flow-doctor[all]"                   # everything
+pip install flow-doctor                          # core only
+pip install "flow-doctor[diagnosis]"             # + LLM diagnosis (anthropic SDK)
+pip install "flow-doctor[diagnosis,remediation]" # + auto-remediation (boto3)
+pip install "flow-doctor[all]"                   # everything
 ```
 
-The `--pre` flag is required while the version tag has an `rc` suffix; drop it once 0.5.0 final ships. Pinning `flow-doctor==0.5.0rc2` works regardless.
+Python 3.9+. Core install is dependency-light (pyyaml, pydantic v2, typing_extensions); each extra pulls only what that capability needs.
 
 ## Quick Start — `FlowDoctor.builder()` (recommended)
 
@@ -449,7 +447,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: pip install --pre "flow-doctor[diagnosis]"
+      - run: pip install "flow-doctor[diagnosis]"
       - run: |
           python -m flow_doctor.fix.cli generate-fix \
             --issue-number ${{ github.event.issue.number }} \
@@ -505,8 +503,8 @@ cd flow-doctor
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev,diagnosis]"
 
-python -m pytest tests/ -x -q             # 376 tests
-python -m pytest tests/ --cov=flow_doctor # coverage report
+python -m pytest tests/ -x -q                          # 394 tests
+python -m coverage run -m pytest && python -m coverage report  # coverage
 python examples/smoke_test.py              # end-to-end smoke test
 ```
 
