@@ -1,0 +1,56 @@
+name: Auto-tag from pyproject.toml version
+
+# Reads the version field from pyproject.toml on every push-to-main and
+# creates + pushes a matching ``vX.Y.Z`` tag if one doesn't exist yet.
+# Mirrors the alpha-engine-lib auto-tag pattern so flow-doctor's git tags
+# stay in lockstep with what publish.yml ships to PyPI — no manual
+# ``git tag && git push --tags`` step.
+#
+# Single source of truth is pyproject.toml — tests/test_version_pin.py
+# enforces ``pyproject == flow_doctor.__version__``, so the auto-tag stays
+# consistent with the installed package version.
+#
+# Idempotent: skips when the tag already exists, so no-version-bump PRs
+# (docs, CI, internal refactors) don't fail this workflow.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Serialize tag pushes so two rapid merges can't race on the same
+# ``git ls-remote`` check and both try to push the same tag.
+concurrency:
+  group: auto-tag-main
+  cancel-in-progress: false
+
+permissions:
+  contents: write  # required to push the tag back to origin
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Read version from pyproject.toml
+        id: ver
+        run: |
+          VERSION=$(python -c "import tomllib; print(tomllib.loads(open('pyproject.toml','rb').read().decode())['project']['version'])")
+          echo "tag=v${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Resolved version tag: v${VERSION}"
+
+      - name: Tag if missing
+        env:
+          TAG: ${{ steps.ver.outputs.tag }}
+        run: |
+          if git ls-remote --tags --exit-code origin "refs/tags/${TAG}" >/dev/null 2>&1; then
+            echo "Tag ${TAG} already exists on origin — no-op (doc/CI-only PR without a version bump)."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "${TAG}" -m "auto-tag from pyproject.toml on push-to-main"
+          git push origin "${TAG}"
+          echo "Pushed ${TAG} → $(git rev-parse HEAD)"
