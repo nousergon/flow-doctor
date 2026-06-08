@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.6.0rc2 (2026-06-08)
+
+Continues the 0.6.0 soak. Typed settings contract.
+
+### Added
+
+- **`pydantic-settings` `FLOW_DOCTOR_*` contract** — `flow_doctor.core
+  .settings.FlowDoctorSettings` is now the declared, typed source of truth
+  for credential resolution. Each field's `AliasChoices` encodes the
+  documented fallback chain (canonical `FLOW_DOCTOR_*` name first, then legacy
+  aliases like `GMAIL_APP_PASSWORD` / `GH_TOKEN`), so precedence is declared on
+  the field rather than buried in a lookup loop.
+- **`.env` file + secrets-directory resolution** — credentials now also
+  resolve from a `.env` file (`FLOW_DOCTOR_ENV_FILE`, default `.env`) and a
+  secrets directory (`FLOW_DOCTOR_SECRETS_DIR` — Docker / Kubernetes
+  file-mounted secrets), on top of process env. Turnkey for self-hosted /
+  compose deployments. Precedence: process env → `.env` → secrets dir.
+
+### Changed
+
+- `_env_fallback` resolves through `FlowDoctorSettings` instead of a raw
+  `os.environ` loop. The named-field `ConfigError` messages are unchanged —
+  this layer is resolution, not validation-gating. New core deps:
+  `pydantic-settings>=2.0`, `python-dotenv>=1.0` (both light).
+
+### Notes
+
+- Suite: 414 passing (403 + 11 settings tests).
+- Still deferred: the OTLP exporter notifier (build-on-demand — see roadmap).
+
 ## 0.6.0rc1 (2026-06-08)
 
 Soak release for the 0.6.0 line. Notification-routing + auto-remediation

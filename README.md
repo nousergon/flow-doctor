@@ -2,8 +2,8 @@
 
 [![Python](https://img.shields.io/badge/python-3.9+-blue.svg)]()
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-403_passing-brightgreen.svg)]()
-[![PyPI](https://img.shields.io/badge/PyPI-v0.6.0rc1-blue.svg)](https://pypi.org/project/flow-doctor/)
+[![Tests](https://img.shields.io/badge/tests-414_passing-brightgreen.svg)]()
+[![PyPI](https://img.shields.io/badge/PyPI-v0.6.0rc2-blue.svg)](https://pypi.org/project/flow-doctor/)
 [![Typed](https://img.shields.io/badge/typed-PEP_561-blue.svg)]()
 
 Pipeline error handler for Python. Captures exceptions, deduplicates failure signatures, optionally diagnoses root causes with LLMs, routes alerts (Telegram / Slack / email / GitHub / S3 / custom), and can generate fix PRs.
@@ -48,7 +48,7 @@ pip install "flow-doctor[diagnosis,remediation]" # + auto-remediation (boto3)
 pip install "flow-doctor[all]"                   # everything
 ```
 
-Python 3.9+. Core install is dependency-light (pyyaml, pydantic v2, typing_extensions); each extra pulls only what that capability needs.
+Python 3.9+. Core install is dependency-light (pyyaml, pydantic v2 + pydantic-settings, python-dotenv, typing_extensions); each extra pulls only what that capability needs.
 
 > **0.6.0 is in its rc cycle.** `pip install flow-doctor` resolves to the latest stable (`0.5.0`); add `--pre` (e.g. `pip install --pre flow-doctor`) to pull `0.6.0rc1`, or pin `flow-doctor==0.6.0rc1`. **0.6.0 removes the deprecated `flow_doctor.init()`** — see [Migrating](#migrating).
 
@@ -296,6 +296,19 @@ fd = FlowDoctor.from_config(config_path="flow-doctor.yaml")
 
 flow-doctor reads credentials from environment variables as its primary configuration mechanism. Every notifier has a documented fallback chain: explicit value → `FLOW_DOCTOR_*` canonical name → common conventions.
 
+The contract is a typed `pydantic-settings` model (`flow_doctor.core.settings.FlowDoctorSettings`), so each field resolves — in precedence order — from:
+
+1. the **process environment** (`FLOW_DOCTOR_*` canonical name, then the legacy aliases below),
+2. a **`.env` file** (path via `FLOW_DOCTOR_ENV_FILE`, default `.env`),
+3. a **secrets directory** (`FLOW_DOCTOR_SECRETS_DIR` — one file per env-var name; Docker / Kubernetes file-mounted secrets).
+
+So a self-hosted / compose deploy can drop a `.env` next to the app or mount file secrets — no code change. Example `.env`:
+
+```dotenv
+FLOW_DOCTOR_TELEGRAM_BOT_TOKEN=1234567890:ABC...
+FLOW_DOCTOR_TELEGRAM_CHAT_ID=-1001234567890
+```
+
 ### Canonical contract
 
 | Variable | Used by | Fallback chain | Required when |
@@ -541,7 +554,7 @@ cd flow-doctor
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev,diagnosis]"
 
-python -m pytest tests/ -x -q                          # 403 tests
+python -m pytest tests/ -x -q                          # 414 tests
 python -m coverage run -m pytest && python -m coverage report  # coverage
 python examples/smoke_test.py              # end-to-end smoke test
 ```
