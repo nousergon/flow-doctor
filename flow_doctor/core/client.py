@@ -23,7 +23,16 @@ from flow_doctor.core.dedup import (
     compute_signature_from_message,
 )
 from flow_doctor.core.errors import ConfigError
-from flow_doctor.core.models import Action, ActionStatus, ActionType, Diagnosis, Report, Severity
+from flow_doctor.core.models import (
+    Action,
+    ActionStatus,
+    ActionType,
+    Decision,
+    DecisionReason,
+    Diagnosis,
+    Report,
+    Severity,
+)
 from flow_doctor.core.rate_limiter import CascadeDetector, RateLimiter
 from flow_doctor.core.scrubber import Scrubber
 from flow_doctor.notify.base import Notifier
@@ -91,6 +100,25 @@ def _env_fallback(key: str) -> Optional[str]:
 _DEFAULT_NOTIFY_ON: FrozenSet[str] = frozenset(
     {Severity.CRITICAL.value, Severity.ERROR.value}
 )
+
+
+def _classify_dispatch(d: Dict[str, int]) -> str:
+    """Map a ``_send_notifications`` result into a single DecisionReason value.
+
+    Priority: any successful send -> fired; else all matching notifiers
+    rate-limited -> rate_limited; else every attempt failed -> delivery_failed;
+    else nothing matched the severity -> severity_filtered; else nothing was
+    configured to receive it -> no_notifiers.
+    """
+    if d.get("sent", 0) > 0:
+        return DecisionReason.FIRED.value
+    if d.get("failed", 0) > 0:
+        return DecisionReason.DELIVERY_FAILED.value
+    if d.get("degraded", 0) > 0:
+        return DecisionReason.RATE_LIMITED.value
+    if d.get("severity_skipped", 0) > 0:
+        return DecisionReason.SEVERITY_FILTERED.value
+    return DecisionReason.NO_NOTIFIERS.value
 
 
 def _normalize_notify_on(raw: Optional[List[str]]) -> Optional[FrozenSet[str]]:
@@ -704,6 +732,11 @@ class FlowDoctor:
         is_dup, existing_id = self._dedup.is_duplicate(error_signature)
         if is_dup and existing_id:
             self._dedup.record_dedup_hit(existing_id)
+            self._record_decision(
+                report_id=existing_id,
+                error_signature=error_signature,
+                reason=DecisionReason.DEDUPED.value,
+            )
             return None
 
         # Cascade check
@@ -731,13 +764,58 @@ class FlowDoctor:
         diagnosis = self._run_diagnosis(report, cascade_source)
 
         # Send notifications (enriched with diagnosis if available)
-        self._send_notifications(report, cascade_source is not None, diagnosis)
+        dispatch = self._send_notifications(report, cascade_source is not None, diagnosis)
+
+        # Record the dispatch decision so a quiet flow is "saw N, alerted M"
+        # rather than indistinguishable from "never ran" (the observability gap).
+        self._record_decision(
+            report_id=report.id,
+            error_signature=error_signature,
+            reason=_classify_dispatch(dispatch),
+            detail="cascade" if cascade_source else None,
+        )
 
         # Phase 3: Decision gate + remediation
         if diagnosis and self._decision_gate:
             self._run_remediation(report, diagnosis)
 
         return report.id
+
+    def _record_decision(
+        self,
+        *,
+        reason: str,
+        report_id: Optional[str] = None,
+        error_signature: Optional[str] = None,
+        detail: Optional[str] = None,
+    ) -> None:
+        """Persist one dispatch decision and log it at INFO.
+
+        Best-effort: a store/log failure here must never break the report
+        path, but it IS logged at WARNING so the observability layer itself
+        fails loud rather than silently.
+        """
+        sig8 = (error_signature or "")[:8]
+        try:
+            self._store.save_decision(
+                Decision(
+                    flow_name=self.config.flow_name,
+                    reason=reason,
+                    report_id=report_id,
+                    error_signature=error_signature,
+                    detail=detail,
+                )
+            )
+        except Exception as e:  # noqa: BLE001 - observability must not break reporting
+            _logger.warning(
+                "flow-doctor: failed to persist decision (reason=%s sig=%s): %s",
+                reason, sig8, e,
+            )
+        _logger.info(
+            "flow-doctor decision [%s] reason=%s sig=%s report=%s%s",
+            self.config.flow_name, reason, sig8, report_id or "-",
+            f" detail={detail}" if detail else "",
+        )
 
     def _build_context(self, user_context: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         """Build enriched context with system info and scrubbed env vars."""
@@ -917,8 +995,12 @@ class FlowDoctor:
         report: Report,
         is_cascade: bool,
         diagnosis: Optional[Diagnosis] = None,
-    ) -> None:
+    ) -> Dict[str, int]:
         """Send notifications, respecting rate limits.
+
+        Returns a dispatch tally ``{attempted, sent, failed, degraded,
+        severity_skipped}`` so the caller can record exactly why this error
+        did or did not produce an alert.
 
         Failures are logged at CRITICAL via the ``flow_doctor`` logger so
         they surface in the host app's log stream (journalctl, Sentry,
@@ -936,11 +1018,15 @@ class FlowDoctor:
         toward attempted/failed — it intentionally isn't a recipient.
         """
         attempted = 0
+        sent = 0
+        degraded = 0
+        severity_skipped = 0
         failed: List[str] = []
 
         for notifier in self._notifiers:
             effective_notify_on = notifier.notify_on or _DEFAULT_NOTIFY_ON
             if report.severity not in effective_notify_on:
+                severity_skipped += 1
                 continue
 
             from flow_doctor.notify.slack import SlackNotifier
@@ -973,6 +1059,7 @@ class FlowDoctor:
                     diagnosis_id=diagnosis.id if diagnosis else None,
                 )
                 self._store.save_action(action)
+                degraded += 1
                 continue
 
             attempted += 1
@@ -1000,6 +1087,7 @@ class FlowDoctor:
                         action_type, report.id,
                     )
                 else:
+                    sent += 1
                     _logger.info(
                         "flow-doctor: notifier %s dispatched report %s -> %s",
                         action_type, report.id, target,
@@ -1027,6 +1115,14 @@ class FlowDoctor:
                 "configuration and notifier credentials.",
                 attempted, report.id, ", ".join(failed),
             )
+
+        return {
+            "attempted": attempted,
+            "sent": sent,
+            "failed": len(failed),
+            "degraded": degraded,
+            "severity_skipped": severity_skipped,
+        }
 
     @contextmanager
     def guard(self):
@@ -1155,6 +1251,12 @@ class FlowDoctor:
             result["remediation_dry_run"] = self.config.remediation.dry_run
             result["notifiers"] = len(self._notifiers)
             result["max_daily_cost_usd"] = self.config.diagnosis.max_daily_cost_usd
+            # Decision breakdown — the heartbeat's core: every error seen today,
+            # keyed by what flow-doctor decided to do with it. Lets an operator
+            # tell "quiet because nothing failed" from "quiet because suppressed".
+            breakdown = self._store.decision_breakdown_today(self.config.flow_name)
+            result["decisions_today"] = breakdown
+            result["errors_seen_today"] = sum(breakdown.values())
         except Exception as e:
             result["status_error"] = str(e)
 
@@ -1171,6 +1273,20 @@ class FlowDoctor:
         if not s.get("healthy"):
             parts.append("DEGRADED")
         else:
+            # Lead with the seen/alerted/suppressed heartbeat so "alive but
+            # quiet" is legible at a glance, then the cost/remediation detail.
+            breakdown = s.get("decisions_today", {}) or {}
+            parts.append(f"seen={s.get('errors_seen_today', 0)}")
+            parts.append(f"fired={breakdown.get(DecisionReason.FIRED.value, 0)}")
+            suppressed = sum(
+                v for k, v in breakdown.items() if k != DecisionReason.FIRED.value
+            )
+            if suppressed:
+                detail = ",".join(
+                    f"{k}={v}" for k, v in sorted(breakdown.items())
+                    if k != DecisionReason.FIRED.value
+                )
+                parts.append(f"suppressed={suppressed}({detail})")
             parts.append(f"reports={s.get('reports_today', 0)}")
             parts.append(f"diagnoses={s.get('diagnoses_today', 0)}")
             cost = s.get("diagnosis_cost_today_usd", 0)

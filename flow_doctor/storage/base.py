@@ -6,7 +6,16 @@ from abc import ABC, abstractmethod
 from datetime import datetime
 from typing import List, Optional
 
-from flow_doctor.core.models import Action, Diagnosis, FixAttempt, KnownPattern, Report
+from typing import Dict
+
+from flow_doctor.core.models import (
+    Action,
+    Decision,
+    Diagnosis,
+    FixAttempt,
+    KnownPattern,
+    Report,
+)
 
 
 class StorageBackend(ABC):
@@ -23,6 +32,14 @@ class StorageBackend(ABC):
     @abstractmethod
     def save_action(self, action: Action) -> None:
         """Persist an action record."""
+
+    @abstractmethod
+    def save_decision(self, decision: Decision) -> None:
+        """Persist a dispatch decision (why an error did/didn't alert)."""
+
+    @abstractmethod
+    def decision_breakdown_today(self, flow_name: Optional[str] = None) -> Dict[str, int]:
+        """Return today's decision counts keyed by reason (UTC), optionally per flow."""
 
     @abstractmethod
     def find_report_by_signature(

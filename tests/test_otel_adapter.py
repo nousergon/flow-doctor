@@ -29,6 +29,16 @@ def _make_report(**overrides) -> Report:
     return Report(**defaults)
 
 
+def test_decision_reason_attribute_emitted_when_passed():
+    out = report_to_otel_span_event(_make_report(), decision_reason="rate_limited")
+    assert out["attributes"]["flow_doctor.decision_reason"] == "rate_limited"
+
+
+def test_decision_reason_absent_by_default():
+    out = report_to_otel_span_event(_make_report())
+    assert "flow_doctor.decision_reason" not in out["attributes"]
+
+
 def test_top_level_shape_matches_otel_span_event():
     out = report_to_otel_span_event(_make_report())
     assert set(out.keys()) == {
