@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.6.0rc3 (2026-06-09)
+
+Observability + fix-PR visibility. Answers "is flow-doctor quiet because nothing
+failed, or because it suppressed something?"
+
+### Added
+
+- **Decision trace** — every evaluated error records exactly one
+  `DecisionReason` (`fired` / `deduped` / `rate_limited` / `severity_filtered`
+  / `delivery_failed` / `no_notifiers`) in a new `decisions` table, logged at
+  INFO. The previously-invisible severity-skip branch now leaves a trace.
+- **Heartbeat** — `status()` gains `decisions_today` + `errors_seen_today`;
+  `log_summary()` leads with `seen=N fired=M suppressed=K(reason=...)` so a
+  quiet flow is legible as alive-but-quiet rather than indistinguishable from
+  never-ran.
+- **`flow_doctor.decision_reason`** optional attribute on
+  `report_to_otel_span_event(report, decision_reason=...)`.
+- **Telegram ping on auto-fix PR** — the fix CLI now pings Telegram when it
+  opens a fix PR (honours a configured `telegram` notifier, falls back to
+  `FLOW_DOCTOR_TELEGRAM_*`), so the PR is as visible as the original issue
+  alert. Best-effort: never raises (the PR already exists).
+
 ## 0.6.0rc2 (2026-06-08)
 
 Continues the 0.6.0 soak. Typed settings contract.

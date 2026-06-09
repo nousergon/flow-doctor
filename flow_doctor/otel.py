@@ -35,7 +35,7 @@ to ``str(value)`` so the shape stays exporter-safe.
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any, Dict, Iterable, Mapping, Tuple
+from typing import Any, Dict, Iterable, Mapping, Optional, Tuple
 
 from flow_doctor.core.models import Report, Severity
 
@@ -87,7 +87,9 @@ def _to_unix_nano(ts: datetime) -> int:
     return int(ts.timestamp() * 1_000_000_000)
 
 
-def report_to_otel_span_event(report: Report) -> Dict[str, Any]:
+def report_to_otel_span_event(
+    report: Report, decision_reason: Optional[str] = None
+) -> Dict[str, Any]:
     """Serialize a :class:`Report` to an OTel ``SpanEvent``-shaped dict.
 
     The result is JSON-safe and ready to fan-out to any OTel collector
@@ -129,6 +131,8 @@ def report_to_otel_span_event(report: Report) -> Dict[str, Any]:
         attributes["flow_doctor.error_signature"] = report.error_signature
     if report.cascade_source:
         attributes["flow_doctor.cascade_source"] = report.cascade_source
+    if decision_reason:
+        attributes["flow_doctor.decision_reason"] = decision_reason
     if report.dedup_count and report.dedup_count != 1:
         attributes["flow_doctor.dedup_count"] = report.dedup_count
     if report.logs:

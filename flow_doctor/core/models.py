@@ -46,6 +46,39 @@ class ActionStatus(str, Enum):
     PR_REJECTED = "pr_rejected"
 
 
+class DecisionReason(str, Enum):
+    """Why flow-doctor did or did not alert on an evaluated error.
+
+    Exactly one decision is recorded per ``report()`` that reaches dispatch,
+    making "saw it and suppressed it" distinguishable from "never saw it" —
+    the observability gap that made flow-doctor "hard to tell why" it was quiet.
+    """
+
+    FIRED = "fired"                          # >=1 notifier sent
+    DEDUPED = "deduped"                       # same signature within cooldown
+    RATE_LIMITED = "rate_limited"             # all matching notifiers degraded
+    SEVERITY_FILTERED = "severity_filtered"   # no notifier opted in at this severity
+    DELIVERY_FAILED = "delivery_failed"       # attempted but every notifier failed
+    NO_NOTIFIERS = "no_notifiers"             # nothing configured to receive it
+
+
+@dataclass
+class Decision:
+    """A single dispatch decision for one evaluated error.
+
+    Recorded at every outcome (including suppressions that previously left no
+    trace) so a daily heartbeat can report seen / fired / suppressed-by-reason.
+    """
+
+    flow_name: str
+    reason: str
+    report_id: Optional[str] = None
+    error_signature: Optional[str] = None
+    detail: Optional[str] = None
+    id: str = field(default_factory=_ulid)
+    created_at: datetime = field(default_factory=datetime.utcnow)
+
+
 @dataclass
 class Report:
     flow_name: str

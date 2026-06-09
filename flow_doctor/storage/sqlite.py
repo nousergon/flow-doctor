@@ -8,7 +8,16 @@ import threading
 from datetime import datetime, date
 from typing import List, Optional
 
-from flow_doctor.core.models import Action, Diagnosis, FixAttempt, KnownPattern, Report
+from typing import Dict
+
+from flow_doctor.core.models import (
+    Action,
+    Decision,
+    Diagnosis,
+    FixAttempt,
+    KnownPattern,
+    Report,
+)
 from flow_doctor.storage.base import StorageBackend
 
 _SCHEMA_SQL = """
@@ -54,6 +63,16 @@ CREATE TABLE IF NOT EXISTS actions (
     target          TEXT,
     status          TEXT NOT NULL,
     metadata        TEXT,
+    created_at      TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS decisions (
+    id              TEXT PRIMARY KEY,
+    report_id       TEXT,
+    flow_name       TEXT NOT NULL,
+    error_signature TEXT,
+    reason          TEXT NOT NULL,
+    detail          TEXT,
     created_at      TEXT NOT NULL
 );
 
@@ -113,6 +132,7 @@ CREATE INDEX IF NOT EXISTS idx_diagnoses_report ON diagnoses(report_id);
 CREATE INDEX IF NOT EXISTS idx_known_patterns_sig ON known_patterns(error_signature);
 CREATE INDEX IF NOT EXISTS idx_fix_attempts_diagnosis ON fix_attempts(diagnosis_id);
 CREATE INDEX IF NOT EXISTS idx_actions_type_created ON actions(action_type, created_at);
+CREATE INDEX IF NOT EXISTS idx_decisions_flow_created ON decisions(flow_name, created_at);
 """
 
 
@@ -176,6 +196,41 @@ class SQLiteStorage(StorageBackend):
             ),
         )
         conn.commit()
+
+    def save_decision(self, decision: Decision) -> None:
+        conn = self._conn()
+        conn.execute(
+            """INSERT INTO decisions
+               (id, report_id, flow_name, error_signature, reason, detail, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (
+                decision.id,
+                decision.report_id,
+                decision.flow_name,
+                decision.error_signature,
+                decision.reason,
+                decision.detail,
+                decision.created_at.isoformat(),
+            ),
+        )
+        conn.commit()
+
+    def decision_breakdown_today(self, flow_name: Optional[str] = None) -> Dict[str, int]:
+        conn = self._conn()
+        today = date.today().isoformat()
+        if flow_name:
+            rows = conn.execute(
+                """SELECT reason, COUNT(*) AS cnt FROM decisions
+                   WHERE flow_name = ? AND created_at >= ? GROUP BY reason""",
+                (flow_name, today),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """SELECT reason, COUNT(*) AS cnt FROM decisions
+                   WHERE created_at >= ? GROUP BY reason""",
+                (today,),
+            ).fetchall()
+        return {r["reason"]: r["cnt"] for r in rows}
 
     def save_remediation_action(
         self,

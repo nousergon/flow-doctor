@@ -335,8 +335,64 @@ def generate_fix(
     comment = f"Fix PR created: {pr_url}"
     GitHubNotifier.comment_on_issue(repo, issue_number, comment, token)
 
+    # Ping Telegram so the fix PR is as visible as the original issue alert.
+    # Best-effort: a telegram failure must not flip the (succeeded) PR result,
+    # but it is logged to stderr so the notification path itself fails loud.
+    _notify_telegram_pr(config, flow_name, pr_url, issue_number)
+
     print(f"[flow-doctor] PR created: {pr_url}")
     return (True, f"PR created: {pr_url}")
+
+
+def _notify_telegram_pr(config, flow_name: str, pr_url: str, issue_number: int) -> None:
+    """Send a Telegram ping announcing an auto-generated fix PR.
+
+    Honours a ``telegram`` notifier in the flow-doctor config (creds already
+    ``${VAR}``-resolved by ``load_config``); falls back to the
+    ``FLOW_DOCTOR_TELEGRAM_*`` env vars. No telegram configured → skip quietly.
+    Failures are logged to stderr, never raised — the PR already exists.
+    """
+    try:
+        from flow_doctor.notify.telegram import TelegramNotifier
+
+        notifier: Optional[TelegramNotifier] = None
+        for nc in getattr(config, "notify", []) or []:
+            if getattr(nc, "type", None) == "telegram" and getattr(nc, "bot_token", None):
+                notifier = TelegramNotifier(
+                    bot_token=nc.bot_token,
+                    chat_id=nc.chat_id,
+                    message_thread_id=getattr(nc, "message_thread_id", None),
+                    parse_mode=getattr(nc, "parse_mode", "Markdown"),
+                    disable_notification=getattr(nc, "disable_notification", False),
+                )
+                break
+
+        if notifier is None:
+            bot_token = os.environ.get("FLOW_DOCTOR_TELEGRAM_BOT_TOKEN")
+            raw_chat = os.environ.get("FLOW_DOCTOR_TELEGRAM_CHAT_ID")
+            if not bot_token or not raw_chat:
+                print(
+                    "[flow-doctor] No telegram notifier configured — skipping PR ping",
+                    file=sys.stderr,
+                )
+                return
+            chat_id: Any = int(raw_chat) if raw_chat.lstrip("-").isdigit() else raw_chat
+            thread = os.environ.get("FLOW_DOCTOR_TELEGRAM_MESSAGE_THREAD_ID")
+            notifier = TelegramNotifier(
+                bot_token=bot_token,
+                chat_id=chat_id,
+                message_thread_id=int(thread) if thread and thread.isdigit() else None,
+            )
+
+        # Plain text: PR URLs contain '_' / '-' that Markdown would mangle.
+        msg = f"🔧 Flow Doctor fix PR for {flow_name} (issue #{issue_number}): {pr_url}"
+        if notifier.send_raw(msg, parse_mode=None) is None:
+            print(
+                "[flow-doctor] Telegram PR ping returned failure (see notifier log)",
+                file=sys.stderr,
+            )
+    except Exception as e:  # noqa: BLE001 - secondary notification, PR already created
+        print(f"[flow-doctor] Telegram PR ping failed: {e}", file=sys.stderr)
 
 
 def _comment_failure(repo: str, issue_number: int, token: str, reason: str) -> None:

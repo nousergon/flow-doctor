@@ -2,8 +2,8 @@
 
 [![Python](https://img.shields.io/badge/python-3.9+-blue.svg)]()
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-414_passing-brightgreen.svg)]()
-[![PyPI](https://img.shields.io/badge/PyPI-v0.6.0rc2-blue.svg)](https://pypi.org/project/flow-doctor/)
+[![Tests](https://img.shields.io/badge/tests-429_passing-brightgreen.svg)]()
+[![PyPI](https://img.shields.io/badge/PyPI-v0.6.0rc3-blue.svg)](https://pypi.org/project/flow-doctor/)
 [![Typed](https://img.shields.io/badge/typed-PEP_561-blue.svg)]()
 
 Pipeline error handler for Python. Captures exceptions, deduplicates failure signatures, optionally diagnoses root causes with LLMs, routes alerts (Telegram / Slack / email / GitHub / S3 / custom), and can generate fix PRs.
