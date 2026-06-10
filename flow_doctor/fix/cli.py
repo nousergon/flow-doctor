@@ -139,8 +139,13 @@ def generate_fix(
     """
     repo_path = repo_path or os.getcwd()
 
-    # Load config
-    config = load_config(config_path=config_path)
+    # Load config. The fix CLI only consumes auto_fix/diagnosis (+ the --token
+    # arg for all GitHub ops) — it never reads the notify/github blocks. Skip
+    # them so their ${VAR}s (e.g. ${EMAIL_SENDER} / ${FLOW_DOCTOR_GITHUB_TOKEN}
+    # on a CI runtime that has no email creds) don't abort the load. Resolution
+    # stays strict for what's kept, so a genuinely-missing diagnosis.api_key
+    # still fails loud.
+    config = load_config(config_path=config_path, skip_sections=("notify", "github"))
     af_config = config.auto_fix
 
     # Fetch issue

@@ -1,6 +1,9 @@
 """Tests for fix CLI: metadata parsing, gate checks, orchestration."""
 
 import json
+import os
+import tempfile
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from flow_doctor.fix.cli import (
@@ -85,6 +88,65 @@ def _mock_issue(metadata: dict) -> dict:
     meta_lines = "\n".join(f"{k}: {v}" for k, v in metadata.items())
     body = f"Issue text\n\n<!-- flow-doctor-metadata\n{meta_lines}\n-->"
     return {"body": body, "number": 42}
+
+
+def test_generate_fix_loads_config_with_unset_notifier_vars(tmp_path, monkeypatch):
+    """Regression (alpha-engine-data #391): the fix CLI must load a config whose
+    UNUSED notify/github blocks reference unset ${VAR}s (e.g. ${EMAIL_SENDER},
+    ${FLOW_DOCTOR_GITHUB_TOKEN} on a CI runtime with no email creds). Previously
+    this aborted at load_config with ConfigError before any fix work. The CLI now
+    skips those sections; resolution stays strict for what it uses
+    (diagnosis.api_key, set here), so it proceeds past config load to the gates.
+    """
+    cfg = """
+flow_name: test
+notify:
+  - type: email
+    sender: ${UNSET_EMAIL_SENDER}
+    recipients: ${UNSET_EMAIL_RECIPIENTS}
+    smtp_password: ${UNSET_GMAIL_APP_PASSWORD}
+github:
+  token: ${UNSET_FLOW_DOCTOR_GITHUB_TOKEN}
+store:
+  type: sqlite
+  path: %s
+diagnosis:
+  enabled: true
+  model: claude-haiku-4-5
+  api_key: ${ANTHROPIC_API_KEY}
+auto_fix:
+  enabled: true
+  model: claude-haiku-4-5
+  confidence_threshold: 0.90
+""" % (tmp_path / "fd.db")
+    cfg_file = tmp_path / "flow-doctor.yaml"
+    cfg_file.write_text(cfg)
+
+    # No affected_files -> the run returns at that gate, which is AFTER
+    # load_config. Reaching the gate at all proves the load no longer raises.
+    issue = _mock_issue({
+        "report_id": "r1", "diagnosis_id": "d1", "flow_name": "test",
+        "category": "CODE", "confidence": "0.95",
+        "root_cause": "Bug", "remediation": "Fix",
+        "affected_files": "", "error_signature": "sig",
+    })
+
+    for var in ("UNSET_EMAIL_SENDER", "UNSET_EMAIL_RECIPIENTS",
+                "UNSET_GMAIL_APP_PASSWORD", "UNSET_FLOW_DOCTOR_GITHUB_TOKEN"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+
+    with patch("flow_doctor.fix.cli.fetch_issue", return_value=issue), \
+         patch("flow_doctor.fix.cli.GitHubNotifier.comment_on_issue"):
+        success, msg = generate_fix(
+            issue_number=42, repo="owner/repo", token="tok",
+            config_path=str(cfg_file), dry_run=True, repo_path=str(tmp_path),
+        )
+
+    # Loaded past the unset notify/github ${VAR}s (previously ConfigError) and
+    # reached the affected-files gate.
+    assert success is False
+    assert "affected files" in msg.lower()
 
 
 def test_generate_fix_unfixable_category():

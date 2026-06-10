@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.6.0rc4 (2026-06-10)
+
+Fix-CLI config robustness.
+
+### Fixed
+
+- **The fix CLI no longer aborts on unset env vars in config blocks it never
+  uses.** `flow_doctor.fix.cli generate-fix` now loads config with
+  `allow_unresolved=True`, so a `${VAR}` in the `notify` block (e.g.
+  `${EMAIL_SENDER}` on a CI runtime that has no email creds) no longer raises
+  `ConfigError` before any fix work — the fix path only consumes `auto_fix` /
+  `diagnosis` and the `--token` arg. Required values are still validated: an
+  unresolved `${ANTHROPIC_API_KEY}` literal in `diagnosis.api_key` is treated
+  as not-configured and falls back to the environment (clean "No Anthropic API
+  key configured" rather than feeding the literal to the client). Surfaced by
+  every alpha-engine-data "Flow Doctor Fix" run failing with
+  `Unresolved environment variable(s): EMAIL_SENDER`.
+
+### Added
+
+- **`load_config(allow_unresolved=...)`** — opt-in lenient env-var resolution
+  for callers that consume only a subset of the config. Default stays strict
+  (fail-loud) for the full-runtime path.
+
 ## 0.6.0rc3 (2026-06-09)
 
 Observability + fix-PR visibility. Answers "is flow-doctor quiet because nothing
