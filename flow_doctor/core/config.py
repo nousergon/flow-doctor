@@ -13,7 +13,7 @@ from __future__ import annotations
 import os
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Sequence, Union
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field
@@ -355,9 +355,21 @@ def _parse_store(raw: Any) -> StoreConfig:
 
 def load_config(
     config_path: Optional[str] = None,
+    *,
+    skip_sections: Sequence[str] = (),
     **kwargs: Any,
 ) -> FlowDoctorConfig:
-    """Load config from YAML file, inline kwargs, or both (kwargs override YAML)."""
+    """Load config from YAML file, inline kwargs, or both (kwargs override YAML).
+
+    ``skip_sections`` lists top-level YAML keys to DROP before any env-var
+    resolution or parsing. Use it when the caller consumes only a subset of the
+    config and the dropped blocks reference ``${VAR}`` that isn't set in this
+    runtime — e.g. the fix CLI skips ``notify``/``github`` (it does all GitHub
+    work via the ``--token`` arg and never reads those blocks), so unset
+    ``${EMAIL_SENDER}`` / ``${FLOW_DOCTOR_GITHUB_TOKEN}`` on a CI runtime don't
+    abort the load. Resolution stays STRICT (fail-loud) for every section that
+    is kept — a genuinely-missing var the caller DOES use still raises.
+    """
     raw: Dict[str, Any] = {}
 
     if config_path:
@@ -365,6 +377,8 @@ def load_config(
         if path.exists():
             with open(path) as f:
                 raw = yaml.safe_load(f) or {}
+            for section in skip_sections:
+                raw.pop(section, None)
             raw = _resolve_dict(raw)
 
     # Merge inline kwargs (they override YAML values)
