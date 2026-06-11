@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import enum
 import json
 import os
 import re
@@ -23,6 +24,40 @@ from flow_doctor.notify.github import GitHubNotifier
 
 # Categories that cannot be auto-fixed
 _UNFIXABLE_CATEGORIES = {"EXTERNAL", "INFRA"}
+
+
+class FixOutcome(enum.Enum):
+    """Terminal state of a fix-generation run.
+
+    Three states, deliberately distinct, because the workflow exit code keys
+    off them:
+
+    - ``CREATED``  — a fix PR was opened (or, under --dry-run, would have been).
+                     The happy path.
+    - ``SKIPPED``  — flow-doctor worked *as designed* and decided no auto-fix
+                     applies: the diagnosis is out of auto-fix scope (EXTERNAL/
+                     INFRA, credentials, low confidence), there's nothing
+                     actionable to patch, or a safety gate (scope guard,
+                     test-validation) correctly withheld a PR. This is a
+                     NOTIFICATION, not an error — exit 0 so the CI job stays
+                     green and no "fix generation failed" alarm fires.
+    - ``FAILED``   — the fixer machinery itself broke: couldn't reach GitHub,
+                     couldn't read the checkout, no API key, diff wouldn't
+                     apply, push/PR failed. A genuine error — exit 1.
+
+    The bug this fixes: EXTERNAL (a provider outage flow-doctor cannot patch)
+    was returning the same "failure" signal as a real malfunction, painting the
+    run red and double-commenting "fix generation failed" on a correct no-op.
+    """
+
+    CREATED = "created"
+    SKIPPED = "skipped"
+    FAILED = "failed"
+
+    @property
+    def is_error(self) -> bool:
+        """True only for genuine fixer malfunctions (drives exit code 1)."""
+        return self is FixOutcome.FAILED
 
 
 def parse_issue_metadata(body: str) -> Optional[Dict[str, str]]:
@@ -131,11 +166,14 @@ def generate_fix(
     config_path: Optional[str] = None,
     dry_run: bool = False,
     repo_path: Optional[str] = None,
-) -> Tuple[bool, str]:
+) -> Tuple[FixOutcome, str]:
     """Main fix generation flow.
 
     Returns:
-        (success, message) — success is True if a PR was created (or would be in dry-run).
+        (outcome, message) — see :class:`FixOutcome`. ``CREATED`` when a PR was
+        opened (or would be under dry-run); ``SKIPPED`` when flow-doctor
+        deliberately declined to auto-fix (a notification, not an error);
+        ``FAILED`` when the fixer machinery itself broke.
     """
     repo_path = repo_path or os.getcwd()
 
@@ -153,14 +191,17 @@ def generate_fix(
     try:
         issue = fetch_issue(repo, issue_number, token)
     except Exception as e:
-        return (False, f"Failed to fetch issue: {e}")
+        return (FixOutcome.FAILED, f"Failed to fetch issue: {e}")
 
     body = issue.get("body", "")
     metadata = parse_issue_metadata(body)
     if not metadata:
+        # The fix workflow only triggers on flow-doctor-filed issues, so a
+        # missing metadata block means the issue is malformed or the wrong
+        # issue was labelled — a genuine fault, not a working-as-intended skip.
         msg = "No flow-doctor metadata found in issue body"
         _comment_failure(repo, issue_number, token, msg)
-        return (False, msg)
+        return (FixOutcome.FAILED, msg)
 
     # Extract diagnosis fields
     category = metadata.get("category", "")
@@ -173,41 +214,47 @@ def generate_fix(
     diagnosis_id = metadata.get("diagnosis_id", "")
     error_signature = metadata.get("error_signature", "")
 
-    # Gate: unfixable category
+    # Gate: unfixable category. EXTERNAL (provider outage) / INFRA are not code
+    # bugs — there is nothing to patch. A deliberate skip, not a failure.
     if category in _UNFIXABLE_CATEGORIES:
         msg = f"Category `{category}` is not auto-fixable"
-        _comment_failure(repo, issue_number, token, msg)
-        return (False, msg)
+        _comment_skipped(repo, issue_number, token, msg)
+        return (FixOutcome.SKIPPED, msg)
 
-    # Gate: CONFIG with credentials
+    # Gate: CONFIG with credentials — auto-fixing secrets is intentionally out
+    # of scope (a safety policy, working as designed).
     if category == "CONFIG" and _is_config_credentials_issue(root_cause):
         msg = "CONFIG issue involving credentials/secrets is not auto-fixable"
-        _comment_failure(repo, issue_number, token, msg)
-        return (False, msg)
+        _comment_skipped(repo, issue_number, token, msg)
+        return (FixOutcome.SKIPPED, msg)
 
-    # Gate: confidence threshold
+    # Gate: confidence threshold — too uncertain to propose a fix; declining is
+    # the correct behaviour.
     if confidence < af_config.confidence_threshold:
         msg = (
             f"Confidence {confidence:.0%} below threshold "
             f"{af_config.confidence_threshold:.0%}"
         )
-        _comment_failure(repo, issue_number, token, msg)
-        return (False, msg)
+        _comment_skipped(repo, issue_number, token, msg)
+        return (FixOutcome.SKIPPED, msg)
 
-    # Gate: no affected files
+    # Gate: no affected files — the diagnosis named nothing to patch; there is
+    # no actionable fix to attempt.
     if not affected_files:
         msg = "No affected files specified in diagnosis"
-        _comment_failure(repo, issue_number, token, msg)
-        return (False, msg)
+        _comment_skipped(repo, issue_number, token, msg)
+        return (FixOutcome.SKIPPED, msg)
 
     print(f"[flow-doctor] Diagnosis: {category} | confidence={confidence:.0%} | files={affected_files}")
 
     # Read file contents
     file_contents = _read_file_contents(repo_path, affected_files)
     if not file_contents:
+        # The diagnosis named files but none exist in the checkout — a real
+        # fault (wrong checkout / stale paths), not a working-as-intended skip.
         msg = "Could not read any affected files from the local checkout"
         _comment_failure(repo, issue_number, token, msg)
-        return (False, msg)
+        return (FixOutcome.FAILED, msg)
 
     test_contents = _find_test_files(repo_path, affected_files)
 
@@ -231,7 +278,7 @@ def generate_fix(
     if not api_key:
         msg = "No Anthropic API key configured"
         _comment_failure(repo, issue_number, token, msg)
-        return (False, msg)
+        return (FixOutcome.FAILED, msg)
 
     model = af_config.model or config.diagnosis.model
     print(f"[flow-doctor] Generating fix with {model}...")
@@ -249,24 +296,27 @@ def generate_fix(
     )
 
     if not diff:
+        # The model deliberately declined (NO_FIX) — same spirit as the
+        # confidence gate: a correct "no confident fix", not a malfunction.
         msg = "LLM could not generate a confident fix (returned NO_FIX)"
-        _comment_failure(repo, issue_number, token, msg)
-        return (False, msg)
+        _comment_skipped(repo, issue_number, token, msg)
+        return (FixOutcome.SKIPPED, msg)
 
-    # Scope guard
+    # Scope guard — a safety gate. Blocking an out-of-scope diff is the guard
+    # working as intended, so withholding the PR is a skip, not a failure.
     diff_files = FixGenerator.extract_files_from_diff(diff)
     scope_guard = ScopeGuard(allow=af_config.scope.allow, deny=af_config.scope.deny)
     passed, violations = scope_guard.check(diff_files)
     if not passed:
         msg = f"Scope guard violations: {'; '.join(violations)}"
-        _comment_failure(repo, issue_number, token, msg)
-        return (False, msg)
+        _comment_skipped(repo, issue_number, token, msg)
+        return (FixOutcome.SKIPPED, msg)
 
-    # Apply diff
+    # Apply diff. A diff that won't apply is a genuine fault (malformed patch).
     if not PRCreator.apply_diff(repo_path, diff):
         msg = "Failed to apply generated diff"
         _comment_failure(repo, issue_number, token, msg)
-        return (False, msg)
+        return (FixOutcome.FAILED, msg)
 
     # Run tests
     print(f"[flow-doctor] Running tests: {af_config.test_command}")
@@ -282,20 +332,23 @@ def generate_fix(
     )
 
     if not test_passed:
+        # The validator correctly rejected a fix that broke tests and reverted
+        # it. Withholding the PR is the safety gate working as intended — a
+        # skip, not a fixer malfunction.
         attempt.rejection_reason = "Tests failed"
         _save_attempt(config, attempt)
         # Revert changes
         _revert_changes(repo_path)
         msg = f"Fix attempted but tests failed:\n```\n{test_output[:2000]}\n```"
-        _comment_failure(repo, issue_number, token, msg)
-        return (False, "Tests failed after applying fix")
+        _comment_skipped(repo, issue_number, token, msg)
+        return (FixOutcome.SKIPPED, "Tests failed after applying fix")
 
     # Dry run check
     if dry_run or af_config.dry_run:
         _revert_changes(repo_path)
         print("[flow-doctor] Dry run — skipping PR creation")
         print(f"[flow-doctor] Generated diff:\n{diff}")
-        return (True, "Dry run successful — fix generated and tests passed")
+        return (FixOutcome.CREATED, "Dry run successful — fix generated and tests passed")
 
     # Create branch, commit, push, PR
     base_branch = _get_default_branch(repo_path)
@@ -304,7 +357,7 @@ def generate_fix(
     if not PRCreator.commit_and_push(repo_path, branch, commit_msg):
         msg = "Failed to push fix branch"
         _comment_failure(repo, issue_number, token, msg)
-        return (False, msg)
+        return (FixOutcome.FAILED, msg)
 
     pr_title = f"fix({flow_name}): {root_cause[:60]}"
     pr_body = (
@@ -330,7 +383,7 @@ def generate_fix(
     if not pr_url:
         msg = "Branch pushed but PR creation failed"
         _comment_failure(repo, issue_number, token, msg)
-        return (False, msg)
+        return (FixOutcome.FAILED, msg)
 
     attempt.pr_url = pr_url
     attempt.pr_status = "open"
@@ -346,7 +399,7 @@ def generate_fix(
     _notify_telegram_pr(config, flow_name, pr_url, issue_number)
 
     print(f"[flow-doctor] PR created: {pr_url}")
-    return (True, f"PR created: {pr_url}")
+    return (FixOutcome.CREATED, f"PR created: {pr_url}")
 
 
 def _notify_telegram_pr(config, flow_name: str, pr_url: str, issue_number: int) -> None:
@@ -400,11 +453,30 @@ def _notify_telegram_pr(config, flow_name: str, pr_url: str, issue_number: int) 
         print(f"[flow-doctor] Telegram PR ping failed: {e}", file=sys.stderr)
 
 
-def _comment_failure(repo: str, issue_number: int, token: str, reason: str) -> None:
-    """Comment on the issue explaining why the fix was not generated."""
-    body = f"**Flow Doctor Auto-Fix:** Could not generate fix.\n\n**Reason:** {reason}"
+def _comment_skipped(repo: str, issue_number: int, token: str, reason: str) -> None:
+    """Comment that no auto-fix applies — an informational notification.
+
+    Used when flow-doctor worked as designed and deliberately declined to open
+    a fix PR (out-of-scope category, low confidence, nothing to patch, a safety
+    gate withholding a fix). Phrased as a notice, NOT a failure, because the run
+    exits 0 and the issue exists for visibility only.
+    """
+    body = (
+        "ℹ️ **Flow Doctor:** no auto-fix generated — this is expected, "
+        "not an error.\n\n"
+        f"**Reason:** {reason}\n\n"
+        "This issue stands as a notification for human review; flow-doctor has "
+        "nothing to patch automatically here."
+    )
     GitHubNotifier.comment_on_issue(repo, issue_number, body, token)
-    print(f"[flow-doctor] Fix skipped: {reason}", file=sys.stderr)
+    print(f"[flow-doctor] No auto-fix (skipped): {reason}", file=sys.stderr)
+
+
+def _comment_failure(repo: str, issue_number: int, token: str, reason: str) -> None:
+    """Comment that the fixer itself failed — a genuine error worth attention."""
+    body = f"⚠️ **Flow Doctor Auto-Fix:** fix generation failed.\n\n**Reason:** {reason}"
+    GitHubNotifier.comment_on_issue(repo, issue_number, body, token)
+    print(f"[flow-doctor] Fix FAILED: {reason}", file=sys.stderr)
 
 
 def _save_attempt(config, attempt: FixAttempt) -> None:
@@ -483,7 +555,7 @@ def main() -> None:
         print("Error: --token is required (or set GITHUB_TOKEN)", file=sys.stderr)
         sys.exit(1)
 
-    success, message = generate_fix(
+    outcome, message = generate_fix(
         issue_number=args.issue_number,
         repo=repo,
         token=token,
@@ -492,8 +564,11 @@ def main() -> None:
         repo_path=args.repo_path,
     )
 
-    print(f"[flow-doctor] Result: {message}")
-    sys.exit(0 if success else 1)
+    print(f"[flow-doctor] Result [{outcome.value}]: {message}")
+    # Exit non-zero ONLY for a genuine fixer malfunction. A deliberate skip
+    # (e.g. an EXTERNAL provider outage flow-doctor can't patch) exits 0 so the
+    # CI job stays green and the workflow's failure() alarm does not fire.
+    sys.exit(1 if outcome.is_error else 0)
 
 
 if __name__ == "__main__":

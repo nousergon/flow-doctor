@@ -10,6 +10,7 @@ from flow_doctor.fix.cli import (
     parse_issue_metadata,
     _is_config_credentials_issue,
     generate_fix,
+    FixOutcome,
 )
 
 
@@ -138,14 +139,15 @@ auto_fix:
 
     with patch("flow_doctor.fix.cli.fetch_issue", return_value=issue), \
          patch("flow_doctor.fix.cli.GitHubNotifier.comment_on_issue"):
-        success, msg = generate_fix(
+        outcome, msg = generate_fix(
             issue_number=42, repo="owner/repo", token="tok",
             config_path=str(cfg_file), dry_run=True, repo_path=str(tmp_path),
         )
 
     # Loaded past the unset notify/github ${VAR}s (previously ConfigError) and
-    # reached the affected-files gate.
-    assert success is False
+    # reached the affected-files gate (a working-as-intended skip).
+    assert outcome is FixOutcome.SKIPPED
+    assert not outcome.is_error
     assert "affected files" in msg.lower()
 
 
@@ -164,12 +166,15 @@ def test_generate_fix_unfixable_category():
 
     with patch("flow_doctor.fix.cli.fetch_issue", return_value=issue), \
          patch("flow_doctor.fix.cli.GitHubNotifier.comment_on_issue"):
-        success, msg = generate_fix(
+        outcome, msg = generate_fix(
             issue_number=42, repo="owner/repo", token="tok",
             config_path=None, dry_run=True,
         )
 
-    assert success is False
+    # EXTERNAL (provider outage) is a working-as-intended skip, NOT an error —
+    # this is the exact case that was painting CI runs red. Must exit 0.
+    assert outcome is FixOutcome.SKIPPED
+    assert not outcome.is_error
     assert "not auto-fixable" in msg
 
 
@@ -188,12 +193,13 @@ def test_generate_fix_low_confidence():
 
     with patch("flow_doctor.fix.cli.fetch_issue", return_value=issue), \
          patch("flow_doctor.fix.cli.GitHubNotifier.comment_on_issue"):
-        success, msg = generate_fix(
+        outcome, msg = generate_fix(
             issue_number=42, repo="owner/repo", token="tok",
             config_path=None, dry_run=True,
         )
 
-    assert success is False
+    assert outcome is FixOutcome.SKIPPED
+    assert not outcome.is_error
     assert "below threshold" in msg
 
 
@@ -202,12 +208,14 @@ def test_generate_fix_no_metadata():
 
     with patch("flow_doctor.fix.cli.fetch_issue", return_value=issue), \
          patch("flow_doctor.fix.cli.GitHubNotifier.comment_on_issue"):
-        success, msg = generate_fix(
+        outcome, msg = generate_fix(
             issue_number=42, repo="owner/repo", token="tok",
             config_path=None, dry_run=True,
         )
 
-    assert success is False
+    # Missing metadata on a fix-labelled issue is a genuine fault → FAILED.
+    assert outcome is FixOutcome.FAILED
+    assert outcome.is_error
     assert "No flow-doctor metadata" in msg
 
 
@@ -226,12 +234,13 @@ def test_generate_fix_config_credentials():
 
     with patch("flow_doctor.fix.cli.fetch_issue", return_value=issue), \
          patch("flow_doctor.fix.cli.GitHubNotifier.comment_on_issue"):
-        success, msg = generate_fix(
+        outcome, msg = generate_fix(
             issue_number=42, repo="owner/repo", token="tok",
             config_path=None, dry_run=True,
         )
 
-    assert success is False
+    assert outcome is FixOutcome.SKIPPED
+    assert not outcome.is_error
     assert "credentials" in msg.lower()
 
 
@@ -250,10 +259,50 @@ def test_generate_fix_no_affected_files():
 
     with patch("flow_doctor.fix.cli.fetch_issue", return_value=issue), \
          patch("flow_doctor.fix.cli.GitHubNotifier.comment_on_issue"):
-        success, msg = generate_fix(
+        outcome, msg = generate_fix(
             issue_number=42, repo="owner/repo", token="tok",
             config_path=None, dry_run=True,
         )
 
-    assert success is False
+    assert outcome is FixOutcome.SKIPPED
+    assert not outcome.is_error
     assert "No affected files" in msg
+
+
+# --- Outcome -> exit-code / comment semantics ---
+
+def test_fix_outcome_is_error_mapping():
+    """Only FAILED drives a non-zero exit; CREATED and SKIPPED stay green."""
+    assert FixOutcome.FAILED.is_error is True
+    assert FixOutcome.SKIPPED.is_error is False
+    assert FixOutcome.CREATED.is_error is False
+
+
+def test_skip_posts_informational_not_failure_comment():
+    """A working-as-intended skip (EXTERNAL) must comment as a notification,
+    not as a failure — this is what stops the issue from looking like an error.
+    """
+    issue = _mock_issue({
+        "report_id": "r1", "diagnosis_id": "d1", "flow_name": "test",
+        "category": "EXTERNAL", "confidence": "0.95",
+        "root_cause": "Provider outage", "remediation": "Wait",
+        "affected_files": "client.py", "error_signature": "sig",
+    })
+
+    captured = {}
+
+    def _capture(repo, issue_number, body, token):
+        captured["body"] = body
+
+    with patch("flow_doctor.fix.cli.fetch_issue", return_value=issue), \
+         patch("flow_doctor.fix.cli.GitHubNotifier.comment_on_issue", _capture):
+        outcome, _ = generate_fix(
+            issue_number=42, repo="owner/repo", token="tok",
+            config_path=None, dry_run=True,
+        )
+
+    assert outcome is FixOutcome.SKIPPED
+    body = captured["body"]
+    assert "not an error" in body.lower()
+    # Must NOT carry the failure framing reserved for genuine malfunctions.
+    assert "fix generation failed" not in body.lower()
