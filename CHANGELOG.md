@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.6.0rc5 (2026-06-11)
+
+Auto-fix outcome is now three-state — a deliberate skip is a notification, not an error.
+
+### Fixed
+
+- **A working-as-intended "no auto-fix" no longer looks like a failure.**
+  `flow_doctor.fix.cli generate-fix` previously returned a boolean
+  success/failure and exited `1` for *every* non-PR outcome — including the
+  cases where flow-doctor correctly decided there was nothing to patch
+  (an `EXTERNAL` provider outage, an `INFRA` issue, a credentials `CONFIG`
+  issue, below-threshold confidence, the LLM returning `NO_FIX`, a scope-guard
+  block, or a fix reverted because it broke tests). That `exit 1` painted the
+  CI run red and triggered the workflow's `failure()` step, which posted a
+  scary "⚠️ Flow Doctor fix generation failed" comment on top of the accurate
+  "not auto-fixable" one. Surfaced by alpha-engine-data#397 (an `EXTERNAL`
+  provider-outage diagnosis reported as a fix-generation failure).
+- The CLI now returns a three-state `FixOutcome` — `CREATED` / `SKIPPED` /
+  `FAILED`. Only `FAILED` (a genuine fixer malfunction: can't reach GitHub,
+  can't read the checkout, no API key, diff won't apply, push/PR failed) exits
+  non-zero. `SKIPPED` exits `0`, keeps the job green, and posts an
+  informational "ℹ️ no auto-fix generated — this is expected, not an error"
+  notification instead of a failure comment. Because the skip path now exits
+  `0`, the consuming workflow's `failure()` comment no longer fires on a
+  correct no-op.
+
 ## 0.6.0rc4 (2026-06-10)
 
 Fix-CLI config robustness.
