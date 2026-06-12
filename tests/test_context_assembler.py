@@ -106,6 +106,25 @@ def test_system_prompt():
     assert "TRANSIENT" in assembler.system_prompt
 
 
+def test_system_prompt_weighs_world_event_hypotheses():
+    """The KLAC regression (alpha-engine-data#417-419): a stock-split restatement
+    was confidently attributed to a recent commit. The prompt must (a) allow for
+    working-as-designed anomaly flags, (b) name corporate actions as a cause
+    class, and (c) de-anchor recent git changes from presumed culpability."""
+    sp = ContextAssembler().system_prompt
+    assert "DESIGNED to flag" in sp
+    assert "corporate action" in sp
+    assert "stock split" in sp
+    assert "NOT the presumed culprit" in sp
+    # Forced hypothesis diversity: a CODE verdict must carry a non-CODE alternative.
+    assert "at least one non-CODE hypothesis" in sp
+
+
+def test_system_prompt_external_covers_upstream_world_events():
+    sp = ContextAssembler().system_prompt
+    assert "EXTERNAL: third-party API/service down, or an upstream/world event" in sp
+
+
 def test_log_truncation_short():
     """Short logs should pass through unchanged."""
     logs = "line1\nline2\nline3"

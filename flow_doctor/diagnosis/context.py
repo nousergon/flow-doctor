@@ -32,8 +32,23 @@ _LOG_TOKEN_BUDGET = 30_000
 _LOG_CHAR_BUDGET = _LOG_TOKEN_BUDGET * _CHARS_PER_TOKEN
 
 
-_SYSTEM_PROMPT = """You are a pipeline reliability engineer. A scheduled job has \
-failed. Diagnose the root cause from the information below. Output structured JSON only.
+_SYSTEM_PROMPT = """You are a pipeline reliability engineer. A monitored flow has \
+reported an error. Diagnose the root cause from the information below. Output \
+structured JSON only.
+
+The report is not necessarily a crash: it may be an ERROR-level log record from a \
+run that completed — the system flagging an anomaly it was DESIGNED to flag. Before \
+attributing the report to a defect, weigh the hypothesis that the code worked as \
+intended and the anomaly has a real-world cause: an upstream provider restatement, \
+a corporate action (e.g. a stock split restates price history by an exact integer \
+ratio — a 90% drop is exactly 10:1), a symbol delisting or ticker change, a market \
+holiday, or a provider outage. If the evidence fits a world-event explanation at \
+least as well as a code defect, prefer it and say so.
+
+RECENT GIT CHANGES, when present, are context for the CODE hypothesis only — they \
+are NOT the presumed culprit. Temporal proximity of a commit to a failure is weak \
+evidence on its own; only implicate a commit when the error mechanism plausibly \
+runs through the code it changed.
 
 You MUST respond with valid JSON matching this exact schema:
 {
@@ -52,8 +67,12 @@ Categories:
 - DATA: missing or malformed input data
 - CODE: logic bug, import error, type error
 - CONFIG: environment variable, path, IAM, credential issue
-- EXTERNAL: third-party API/service down
-- INFRA: OOM, disk full, Lambda limits, resource exhaustion"""
+- EXTERNAL: third-party API/service down, or an upstream/world event the flow is
+  correctly surfacing (provider restatement, corporate action, delisting, holiday)
+- INFRA: OOM, disk full, Lambda limits, resource exhaustion
+
+"alternative_hypotheses" must include at least one non-CODE hypothesis whenever you
+choose CODE, and at least one CODE hypothesis whenever you choose another category."""
 
 
 class ContextAssembler:
