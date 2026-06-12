@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.6.0rc6 (2026-06-12)
+
+Diagnosis prompt: weigh world-event causes; recent commits are not the presumed culprit.
+
+### Fixed
+
+- **The LLM diagnosis no longer presumes the monitored code is broken.**
+  The system prompt framed every report as "a scheduled job has failed",
+  pushed recent git changes into context with no weighing instruction, and
+  defined `EXTERNAL` only as "third-party API/service down". On a
+  working-as-designed data-quality flag — KLA Corp's 10-for-1 stock split
+  restating adjusted history by exactly ÷10 — the diagnosis confidently
+  blamed a recent commit for a "decimal-place shift error"
+  (alpha-engine-data#417–419). The prompt now (a) states the report may be
+  an ERROR log record from a completed run flagging an anomaly it was
+  designed to flag, (b) names the world-event cause class (provider
+  restatements, corporate actions / stock splits with their exact-integer
+  ratio signature, delistings, market holidays), (c) instructs that RECENT
+  GIT CHANGES are context for the CODE hypothesis only — temporal proximity
+  is weak evidence, and (d) requires hypothesis diversity: a CODE verdict
+  must carry at least one non-CODE alternative and vice versa. `EXTERNAL`
+  now explicitly covers upstream/world events the flow correctly surfaces.
+
+
 ## 0.6.0rc5 (2026-06-11)
 
 Auto-fix outcome is now three-state — a deliberate skip is a notification, not an error.
