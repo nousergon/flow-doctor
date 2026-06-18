@@ -479,7 +479,40 @@ flow-doctor generate-fix \
   --dry-run
 ```
 
-GitHub Actions workflow (copy to your repo at `.github/workflows/flow-doctor-fix.yml`):
+### GitHub Actions setup
+
+GitHub only fires a workflow on a repository event (`issues: labeled`) if the
+workflow file lives in **that repo's** `.github/workflows/` — there is no
+org-level workflow for issue events (org rulesets cover only push/PR). So each
+repo needs *a* file. **Recommended: a thin stub that delegates to the reusable
+workflow shipped in this repo**, so all the install/run/comment logic lives
+here once and a behavior change is a version-pin bump rather than an edit in
+every repo. Copy to `.github/workflows/flow-doctor-fix.yml`:
+
+```yaml
+name: Flow Doctor Fix
+on:
+  issues:
+    types: [labeled]
+jobs:
+  fix:
+    if: github.event.label.name == 'flow-doctor:fix'
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    uses: nousergon/flow-doctor/.github/workflows/fix.yml@v0.6.0rc6   # pin to a tag
+    secrets: inherit
+```
+
+Inputs (all optional) let you override `python-version`, `requirements-file`,
+`config-path`, or pass `extra-pip-install` when the caller's requirements don't
+already bring `flow-doctor[diagnosis,s3]`. `secrets: inherit` passes
+`ANTHROPIC_API_KEY` (define it once as an org-level Actions secret to avoid
+per-repo setup). The repo/org setting **"Allow GitHub Actions to create and
+approve pull requests"** must be enabled for the PR step to succeed.
+
+<details><summary>Self-contained alternative (no reusable workflow)</summary>
 
 ```yaml
 name: Flow Doctor Fix
@@ -490,6 +523,10 @@ jobs:
   generate-fix:
     if: github.event.label.name == 'flow-doctor:fix'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -505,6 +542,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 ```
+
+</details>
 
 <a name="migrating"></a>
 

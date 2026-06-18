@@ -1,0 +1,94 @@
+name: Flow Doctor Fix (reusable)
+
+# Reusable workflow that generates a fix PR for a flow-doctor-filed issue.
+#
+# Calling repos do NOT copy this logic — they add a ~13-line stub that
+# subscribes to the `issues: labeled` event (the one piece GitHub requires
+# to live in each repo, since org-level workflows only cover push/PR) and
+# delegates here, pinned to a flow-doctor tag:
+#
+#   name: Flow Doctor Fix
+#   on:
+#     issues:
+#       types: [labeled]
+#   jobs:
+#     fix:
+#       if: github.event.label.name == 'flow-doctor:fix'
+#       permissions:
+#         contents: write
+#         pull-requests: write
+#         issues: write
+#       uses: nousergon/flow-doctor/.github/workflows/fix.yml@v0.6.0rc6
+#       secrets: inherit
+#
+# Cost is bounded upstream: flow-doctor.yaml caps issues at
+# max_issues_per_day (-> that many label events -> that many runs/day), the
+# fix model is Haiku, and diagnosis has a hard daily cap. Generated PRs are
+# proposals (scope-guarded + test-gated) and are NEVER auto-merged.
+
+on:
+  workflow_call:
+    inputs:
+      python-version:
+        description: "Python version for the fix run"
+        type: string
+        default: "3.12"
+      requirements-file:
+        description: "Path to the caller repo's requirements file (installed if present; brings the pinned flow-doctor[diagnosis,s3] via the lib pin)"
+        type: string
+        default: "requirements.txt"
+      config-path:
+        description: "Path to the caller repo's flow-doctor.yaml"
+        type: string
+        default: "flow-doctor.yaml"
+      extra-pip-install:
+        description: "Optional extra pip install args (e.g. 'flow-doctor[diagnosis,s3]==0.6.0rc6' if the caller's requirements don't bring the diagnosis extra)"
+        type: string
+        default: ""
+    secrets:
+      ANTHROPIC_API_KEY:
+        description: "Anthropic API key for the Haiku fix model"
+        required: true
+
+jobs:
+  generate-fix:
+    runs-on: ubuntu-latest
+    # The reusable workflow declares what it needs; the caller's job-level
+    # `permissions:` block caps the GITHUB_TOKEN, so the stub must grant
+    # contents/pull-requests/issues write for PR creation to succeed.
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python-version }}
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          if [ -f "${{ inputs.requirements-file }}" ]; then pip install -r "${{ inputs.requirements-file }}"; fi
+          pip install pytest
+          if [ -n "${{ inputs.extra-pip-install }}" ]; then pip install ${{ inputs.extra-pip-install }}; fi
+
+      - name: Generate fix
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          python -m flow_doctor.fix.cli generate-fix --issue-number ${{ github.event.issue.number }} --repo ${{ github.repository }} --token "$GITHUB_TOKEN" --config "${{ inputs.config-path }}"
+
+      - name: Comment on failure
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.issue.number,
+              body: '⚠️ Flow Doctor fix generation failed. See the [workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) for details.'
+            })
