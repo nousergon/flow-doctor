@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.6.0 (2026-06-26)
+
+Cut the **0.6.0 final** release — drop the release-candidate suffix. No
+source changes versus `0.6.0rc6`: this promotes the soaked rc line to a
+stable tag now that the fleet has run ≥1 clean Saturday+weekday cycle on
+`0.6.0rc3`+ (via alpha-engine-lib), satisfying the soak gate. Consumers can
+re-pin off `==0.6.0rcN` onto a stable range (`>=0.6.0,<0.7`).
+
+The 0.6.x line delivered (across rc1–rc6): the `init()` → `FlowDoctor.from_config()`
+API migration; default-on activation via the lib; the `DecisionReason`
+decision trace + heartbeat (`status()`/`log_summary()`); telegram-on-fix-PR
+in the fix CLI; three-state auto-fix outcomes; and the world-event-aware
+diagnosis prompt.
+
 ## 0.6.0rc6 (2026-06-12)
 
 Diagnosis prompt: weigh world-event causes; recent commits are not the presumed culprit.
