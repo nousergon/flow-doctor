@@ -20,6 +20,8 @@ import pytest
 from flow_doctor.core.errors import ConfigError
 from flow_doctor.core.models import Diagnosis, Report
 from flow_doctor.notify.s3 import (
+    HEARTBEAT_PREFIX,
+    HEARTBEAT_SCHEMA_VERSION,
     S3Notifier,
     SCHEMA_VERSION,
     SEVERITY_MAP,
@@ -27,6 +29,7 @@ from flow_doctor.notify.s3 import (
     _event_id,
     _format_iso_utc,
     _map_diagnosis_category,
+    write_heartbeat,
 )
 
 
@@ -341,3 +344,154 @@ def test_init_picks_bucket_from_env(monkeypatch):
         strict=False,
     )
     assert fd._notifiers[0].bucket == "env-bucket"
+
+
+# --- heartbeat emitter (config#646) ---------------------------------
+
+class TestWriteHeartbeat:
+    """The end-of-run status()->S3 heartbeat write primitive."""
+
+    @staticmethod
+    def _capture_put():
+        """Return (mock boto3 client, captured-kwargs dict)."""
+        captured: dict = {}
+        client = MagicMock()
+        client.put_object.side_effect = lambda **kw: captured.update(kw)
+        return client, captured
+
+    def test_writes_status_to_expected_key(self):
+        status = {
+            "healthy": True,
+            "flow_name": "morning_enrich",
+            "errors_seen_today": 3,
+            "decisions_today": {"fired": 1, "deduped": 2},
+        }
+        client, captured = self._capture_put()
+        with patch("boto3.client", return_value=client):
+            uri = write_heartbeat(
+                status,
+                bucket="alpha-engine-research",
+                flow_name="morning_enrich",
+                date="2026-06-29",
+            )
+
+        assert uri == (
+            "s3://alpha-engine-research/_flow_doctor/heartbeat/"
+            "morning_enrich/2026-06-29.json"
+        )
+        assert captured["Bucket"] == "alpha-engine-research"
+        assert captured["Key"] == "_flow_doctor/heartbeat/morning_enrich/2026-06-29.json"
+        assert captured["ContentType"] == "application/json"
+        body = json.loads(captured["Body"])
+        assert body["schema_version"] == HEARTBEAT_SCHEMA_VERSION
+        assert body["flow_name"] == "morning_enrich"
+        assert body["source"] == "flow-doctor"
+        assert body["status"] == status
+        # ts_utc is the literal-Z schema format
+        assert body["ts_utc"].endswith("Z")
+
+    def test_default_prefix_constant(self):
+        client, captured = self._capture_put()
+        with patch("boto3.client", return_value=client):
+            write_heartbeat({"x": 1}, bucket="b", flow_name="f", date="2026-06-29")
+        assert captured["Key"].startswith(f"{HEARTBEAT_PREFIX}/")
+
+    def test_custom_prefix_is_stripped_and_applied(self):
+        client, captured = self._capture_put()
+        with patch("boto3.client", return_value=client):
+            write_heartbeat(
+                {"x": 1},
+                bucket="b",
+                flow_name="f",
+                prefix="/custom/hb/",
+                date="2026-06-29",
+            )
+        assert captured["Key"] == "custom/hb/f/2026-06-29.json"
+
+    def test_flow_name_sanitized_in_key(self):
+        client, captured = self._capture_put()
+        with patch("boto3.client", return_value=client):
+            uri = write_heartbeat(
+                {"x": 1},
+                bucket="b",
+                flow_name="weird/flow name:v2",
+                date="2026-06-29",
+            )
+        assert captured["Key"] == "_flow_doctor/heartbeat/weird_flow_name_v2/2026-06-29.json"
+        assert uri is not None
+
+    def test_soft_fails_to_none_on_s3_error(self):
+        client = MagicMock()
+        client.put_object.side_effect = RuntimeError("AccessDenied")
+        with patch("boto3.client", return_value=client):
+            uri = write_heartbeat(
+                {"x": 1}, bucket="b", flow_name="f", date="2026-06-29"
+            )
+        assert uri is None
+
+    def test_soft_fails_when_boto3_missing(self):
+        # Simulate boto3 not installed — the lazy import raises ImportError,
+        # which the soft-fail wrapper must swallow (return None, not raise).
+        with patch.dict(sys.modules, {"boto3": None}):
+            uri = write_heartbeat(
+                {"x": 1}, bucket="b", flow_name="f", date="2026-06-29"
+            )
+        assert uri is None
+
+    def test_non_serializable_status_is_coerced_not_raised(self):
+        # status() can carry e.g. datetimes; default=str must keep the
+        # write from failing on payload shape.
+        status = {"ts": datetime(2026, 6, 29, 12, 0, 0, tzinfo=timezone.utc)}
+        client, captured = self._capture_put()
+        with patch("boto3.client", return_value=client):
+            uri = write_heartbeat(
+                status, bucket="b", flow_name="f", date="2026-06-29"
+            )
+        assert uri is not None
+        body = json.loads(captured["Body"])
+        assert "2026-06-29" in body["status"]["ts"]
+
+    def test_default_date_is_today_utc(self):
+        client, captured = self._capture_put()
+        with patch("boto3.client", return_value=client):
+            write_heartbeat({"x": 1}, bucket="b", flow_name="f")
+        expected = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        assert captured["Key"] == f"_flow_doctor/heartbeat/f/{expected}.json"
+
+
+class TestEmitHeartbeatClientMethod:
+    """FlowDoctor.emit_heartbeat() delegates status() to write_heartbeat()."""
+
+    def _make_fd(self, **kwargs):
+        import tempfile
+
+        from flow_doctor.core.client import FlowDoctor
+        from flow_doctor.core.config import load_config
+
+        f = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        config = load_config(
+            flow_name=kwargs.get("flow_name", "hb-flow"),
+            store=f"sqlite://{f.name}",
+        )
+        return FlowDoctor(config)
+
+    def test_delegates_status_to_write_heartbeat(self):
+        fd = self._make_fd(flow_name="hb-flow")
+        with patch("flow_doctor.notify.s3.write_heartbeat") as mock_write:
+            mock_write.return_value = "s3://bucket/_flow_doctor/heartbeat/hb-flow/x.json"
+            out = fd.emit_heartbeat("my-bucket")
+
+        assert out == "s3://bucket/_flow_doctor/heartbeat/hb-flow/x.json"
+        mock_write.assert_called_once()
+        _, kwargs = mock_write.call_args
+        assert kwargs["bucket"] == "my-bucket"
+        assert kwargs["flow_name"] == "hb-flow"
+        assert kwargs["prefix"] == HEARTBEAT_PREFIX
+        # The positional payload is exactly status()
+        assert mock_write.call_args.args[0] == fd.status()
+
+    def test_custom_prefix_passed_through(self):
+        fd = self._make_fd()
+        with patch("flow_doctor.notify.s3.write_heartbeat") as mock_write:
+            fd.emit_heartbeat("b", prefix="health/hb")
+        assert mock_write.call_args.kwargs["prefix"] == "health/hb"

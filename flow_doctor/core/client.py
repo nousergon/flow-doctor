@@ -1301,6 +1301,33 @@ class FlowDoctor:
         target.info(summary)
         return summary
 
+    def emit_heartbeat(
+        self,
+        bucket: str,
+        *,
+        prefix: Optional[str] = None,
+    ) -> Optional[str]:
+        """Write this flow's end-of-run heartbeat (``status()``) to S3.
+
+        Companion to ``log_summary()``: ``log_summary()`` makes the
+        seen/fired/suppressed heartbeat legible in CloudWatch/journalctl;
+        ``emit_heartbeat()`` lands the same ``status()`` snapshot at
+        ``s3://{bucket}/{prefix}/{flow}/{date}.json`` so a dashboard
+        System Health panel can read it (config#646). Call at end-of-run.
+
+        Returns the ``s3://`` URI written, or ``None`` on any failure — a
+        heartbeat write never raises into the calling pipeline (the write
+        primitive soft-fails by design).
+        """
+        from flow_doctor.notify.s3 import HEARTBEAT_PREFIX, write_heartbeat
+
+        return write_heartbeat(
+            self.status(),
+            bucket=bucket,
+            flow_name=self.config.flow_name,
+            prefix=prefix if prefix is not None else HEARTBEAT_PREFIX,
+        )
+
     def _log_startup(self) -> None:
         """Log startup info so operators can confirm flow-doctor is active."""
         components = []
