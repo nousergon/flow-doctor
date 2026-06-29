@@ -349,15 +349,26 @@ def test_init_picks_bucket_from_env(monkeypatch):
 # --- heartbeat emitter (config#646) ---------------------------------
 
 class TestWriteHeartbeat:
-    """The end-of-run status()->S3 heartbeat write primitive."""
+    """The end-of-run status()->S3 heartbeat write primitive.
+
+    boto3 is an OPTIONAL extra ([s3]); CI runs without it installed, so —
+    matching `_send_with_mock` above — these inject a fake boto3 into
+    sys.modules rather than `patch("boto3.client")` (which would need the
+    real module importable just to find the attribute to patch).
+    """
 
     @staticmethod
-    def _capture_put():
-        """Return (mock boto3 client, captured-kwargs dict)."""
+    def _fake_boto3():
+        """Return (fake boto3 module, captured put_object-kwargs dict)."""
         captured: dict = {}
-        client = MagicMock()
-        client.put_object.side_effect = lambda **kw: captured.update(kw)
-        return client, captured
+
+        class _FakeClient:
+            def put_object(self, **kw):
+                captured.update(kw)
+
+        fake = MagicMock()
+        fake.client = MagicMock(return_value=_FakeClient())
+        return fake, captured
 
     def test_writes_status_to_expected_key(self):
         status = {
@@ -366,8 +377,8 @@ class TestWriteHeartbeat:
             "errors_seen_today": 3,
             "decisions_today": {"fired": 1, "deduped": 2},
         }
-        client, captured = self._capture_put()
-        with patch("boto3.client", return_value=client):
+        fake, captured = self._fake_boto3()
+        with patch.dict(sys.modules, {"boto3": fake}):
             uri = write_heartbeat(
                 status,
                 bucket="alpha-engine-research",
@@ -391,14 +402,14 @@ class TestWriteHeartbeat:
         assert body["ts_utc"].endswith("Z")
 
     def test_default_prefix_constant(self):
-        client, captured = self._capture_put()
-        with patch("boto3.client", return_value=client):
+        fake, captured = self._fake_boto3()
+        with patch.dict(sys.modules, {"boto3": fake}):
             write_heartbeat({"x": 1}, bucket="b", flow_name="f", date="2026-06-29")
         assert captured["Key"].startswith(f"{HEARTBEAT_PREFIX}/")
 
     def test_custom_prefix_is_stripped_and_applied(self):
-        client, captured = self._capture_put()
-        with patch("boto3.client", return_value=client):
+        fake, captured = self._fake_boto3()
+        with patch.dict(sys.modules, {"boto3": fake}):
             write_heartbeat(
                 {"x": 1},
                 bucket="b",
@@ -409,8 +420,8 @@ class TestWriteHeartbeat:
         assert captured["Key"] == "custom/hb/f/2026-06-29.json"
 
     def test_flow_name_sanitized_in_key(self):
-        client, captured = self._capture_put()
-        with patch("boto3.client", return_value=client):
+        fake, captured = self._fake_boto3()
+        with patch.dict(sys.modules, {"boto3": fake}):
             uri = write_heartbeat(
                 {"x": 1},
                 bucket="b",
@@ -421,9 +432,13 @@ class TestWriteHeartbeat:
         assert uri is not None
 
     def test_soft_fails_to_none_on_s3_error(self):
-        client = MagicMock()
-        client.put_object.side_effect = RuntimeError("AccessDenied")
-        with patch("boto3.client", return_value=client):
+        class _BoomClient:
+            def put_object(self, **_):
+                raise RuntimeError("AccessDenied")
+
+        fake = MagicMock()
+        fake.client = MagicMock(return_value=_BoomClient())
+        with patch.dict(sys.modules, {"boto3": fake}):
             uri = write_heartbeat(
                 {"x": 1}, bucket="b", flow_name="f", date="2026-06-29"
             )
@@ -442,8 +457,8 @@ class TestWriteHeartbeat:
         # status() can carry e.g. datetimes; default=str must keep the
         # write from failing on payload shape.
         status = {"ts": datetime(2026, 6, 29, 12, 0, 0, tzinfo=timezone.utc)}
-        client, captured = self._capture_put()
-        with patch("boto3.client", return_value=client):
+        fake, captured = self._fake_boto3()
+        with patch.dict(sys.modules, {"boto3": fake}):
             uri = write_heartbeat(
                 status, bucket="b", flow_name="f", date="2026-06-29"
             )
@@ -452,8 +467,8 @@ class TestWriteHeartbeat:
         assert "2026-06-29" in body["status"]["ts"]
 
     def test_default_date_is_today_utc(self):
-        client, captured = self._capture_put()
-        with patch("boto3.client", return_value=client):
+        fake, captured = self._fake_boto3()
+        with patch.dict(sys.modules, {"boto3": fake}):
             write_heartbeat({"x": 1}, bucket="b", flow_name="f")
         expected = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         assert captured["Key"] == f"_flow_doctor/heartbeat/f/{expected}.json"
