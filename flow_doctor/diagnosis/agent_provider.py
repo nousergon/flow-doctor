@@ -15,6 +15,7 @@ import json
 import sys
 from typing import Optional
 
+from flow_doctor.core.constants import DEFAULT_DIAGNOSIS_MODEL
 from flow_doctor.core.models import Diagnosis
 from flow_doctor.diagnosis.context import ContextAssembler, DiagnosisContext
 from flow_doctor.diagnosis.provider import DiagnosisProvider, _VALID_CATEGORIES
@@ -28,7 +29,7 @@ class AgentSDKProvider(DiagnosisProvider):
         cwd: Optional[str] = None,
         max_turns: int = 10,
         max_budget_usd: float = 0.20,
-        model: str = "claude-sonnet-4-6",
+        model: str = DEFAULT_DIAGNOSIS_MODEL,
         confidence_calibration: float = 0.85,
     ):
         self.cwd = cwd
