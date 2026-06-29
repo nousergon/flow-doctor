@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.6.2 (unreleased)
+
+### Added
+
+- **End-of-run heartbeat → S3 emitter** (`FlowDoctor.emit_heartbeat()` +
+  `flow_doctor.notify.s3.write_heartbeat()`). Writes the `status()`
+  snapshot (the seen/fired/suppressed decision breakdown + cost) to
+  `s3://{bucket}/_flow_doctor/heartbeat/{flow}/{YYYY-MM-DD}.json` so a
+  dashboard System Health panel can tell "alive but quiet" from
+  "suppressing X per flow" without scraping CloudWatch/journalctl.
+  Companion to `log_summary()` (same `status()` data, durable sink).
+  Soft-fails to `None` on any error — a liveness write never raises into
+  the pipeline it reports on. Wiring (which call sites invoke it) and the
+  dashboard consumer are deliberately left to the caller. (config#646)
+
 ## 0.6.0 (2026-06-26)
 
 Cut the **0.6.0 final** release — drop the release-candidate suffix. No

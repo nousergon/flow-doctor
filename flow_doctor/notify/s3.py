@@ -44,6 +44,17 @@ _logger = logging.getLogger("flow_doctor")
 
 SCHEMA_VERSION = "1.0.0"
 
+# Heartbeat envelope schema (distinct from the per-incident changelog
+# entry schema above). Bumped independently so a dashboard consumer can
+# version-gate the heartbeat JSON without coupling to the incident schema.
+HEARTBEAT_SCHEMA_VERSION = "1.0.0"
+
+# Default S3 prefix for end-of-run heartbeats — one object per flow per
+# day at ``{prefix}/{flow}/{YYYY-MM-DD}.json`` (config#646). Kept separate
+# from the changelog corpus (``changelog/entries/...``) because a heartbeat
+# is a recurring liveness snapshot, not an incident.
+HEARTBEAT_PREFIX = "_flow_doctor/heartbeat"
+
 # flow_doctor.Severity → schema-1.0.0 severity mapping. The two scales
 # overlap but aren't identical. flow-doctor has 3 levels (critical/error/
 # warning); schema 1.0.0 has 5 (critical/high/medium/low/informational).
@@ -208,6 +219,73 @@ class S3Notifier(Notifier):
             Body=json.dumps(entry, ensure_ascii=False, sort_keys=True).encode("utf-8"),
             ContentType="application/json",
         )
+
+
+def write_heartbeat(
+    status: Dict[str, Any],
+    *,
+    bucket: str,
+    flow_name: str,
+    prefix: str = HEARTBEAT_PREFIX,
+    date: Optional[str] = None,
+) -> Optional[str]:
+    """Write a flow-doctor end-of-run heartbeat (a ``status()`` snapshot) to S3.
+
+    Lands at ``s3://{bucket}/{prefix}/{flow_name}/{YYYY-MM-DD}.json`` so a
+    dashboard System Health panel can read the seen/fired/suppressed
+    breakdown and tell "alive but quiet" from "suppressing X per flow"
+    without scraping CloudWatch/journalctl (config#646). This is the
+    write primitive only — it makes no decision about WHERE it is called
+    from (a dedicated end-of-run hook vs. an existing ``log_summary()``
+    call site); both routes funnel through here.
+
+    Wiring-agnostic and side-effect-isolated:
+    - ``status`` is the dict returned by ``FlowDoctor.status()`` — any
+      JSON-coercible mapping; non-serializable leaves are stringified
+      (``default=str``) so a heartbeat write never fails on payload shape.
+    - Uses the caller's ambient AWS credentials (Lambda role / EC2 role /
+      local CLI), matching ``S3Notifier``.
+    - Soft-fails: returns the ``s3://`` URI on success, ``None`` on ANY
+      error. A liveness write must never raise into the pipeline it is
+      reporting on — same discipline as ``S3Notifier.send()``.
+
+    ``date`` defaults to today's UTC date; pass it explicitly for
+    deterministic keys (tests, backfills).
+    """
+    try:
+        if date is None:
+            date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        flow_safe = "".join(
+            c if c.isalnum() or c in "-_" else "_" for c in flow_name
+        )
+        key = f"{prefix.strip('/')}/{flow_safe}/{date}.json"
+        payload = {
+            "schema_version": HEARTBEAT_SCHEMA_VERSION,
+            "ts_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "flow_name": flow_name,
+            "source": "flow-doctor",
+            "status": status,
+        }
+        # Lazy import keeps boto3 a soft dep, matching S3Notifier._put_object.
+        import boto3
+        client = boto3.client("s3")
+        client.put_object(
+            Bucket=bucket,
+            Key=key,
+            Body=json.dumps(
+                payload, ensure_ascii=False, sort_keys=True, default=str
+            ).encode("utf-8"),
+            ContentType="application/json",
+        )
+        target = f"s3://{bucket}/{key}"
+        _logger.debug("flow-doctor heartbeat written: %s flow=%s", target, flow_name)
+        return target
+    except Exception as exc:  # noqa: BLE001
+        _logger.warning(
+            "write_heartbeat failed for flow=%s: %s: %s",
+            flow_name, type(exc).__name__, exc,
+        )
+        return None
 
 
 def _format_iso_utc(dt: datetime) -> str:
