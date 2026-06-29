@@ -7,6 +7,7 @@ import sys
 from abc import ABC, abstractmethod
 from typing import Optional
 
+from flow_doctor.core.constants import DEFAULT_DIAGNOSIS_MODEL
 from flow_doctor.core.models import Diagnosis
 from flow_doctor.diagnosis.context import ContextAssembler, DiagnosisContext
 
@@ -29,7 +30,7 @@ class AnthropicProvider(DiagnosisProvider):
     def __init__(
         self,
         api_key: str,
-        model: str = "claude-sonnet-4-6-20250514",
+        model: str = DEFAULT_DIAGNOSIS_MODEL,
         confidence_calibration: float = 0.85,
         timeout_seconds: int = 30,
     ):

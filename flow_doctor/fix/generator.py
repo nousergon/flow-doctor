@@ -5,6 +5,7 @@ from __future__ import annotations
 import sys
 from typing import Dict, List, Optional
 
+from flow_doctor.core.constants import DEFAULT_DIAGNOSIS_MODEL
 from flow_doctor.fix.prompts import SYSTEM_PROMPT, build_fix_prompt
 
 
@@ -14,7 +15,7 @@ class FixGenerator:
     def __init__(
         self,
         api_key: str,
-        model: str = "claude-sonnet-4-6-20250514",
+        model: str = DEFAULT_DIAGNOSIS_MODEL,
         timeout_seconds: int = 60,
     ):
         self.api_key = api_key

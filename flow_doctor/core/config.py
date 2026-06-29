@@ -18,6 +18,7 @@ from typing import Any, Dict, List, Optional, Sequence, Union
 import yaml
 from pydantic import BaseModel, ConfigDict, Field
 
+from flow_doctor.core.constants import DEFAULT_DIAGNOSIS_MODEL
 from flow_doctor.core.errors import ConfigError
 
 
@@ -112,7 +113,7 @@ class RateLimitConfig(_ConfigModel):
 class DiagnosisConfig(_ConfigModel):
     enabled: bool = False
     provider: str = "anthropic"
-    model: str = "claude-sonnet-4-6-20250514"
+    model: str = DEFAULT_DIAGNOSIS_MODEL
     api_key: Optional[str] = None
     confidence_calibration: float = 0.85
     timeout_seconds: int = 30
@@ -431,7 +432,7 @@ def load_config(
         diagnosis_config = DiagnosisConfig(
             enabled=diag_raw.get("enabled", False),
             provider=diag_raw.get("provider", "anthropic"),
-            model=diag_raw.get("model", "claude-sonnet-4-6-20250514"),
+            model=diag_raw.get("model", DEFAULT_DIAGNOSIS_MODEL),
             api_key=diag_raw.get("api_key"),
             confidence_calibration=float(diag_raw.get("confidence_calibration", 0.85)),
             timeout_seconds=int(diag_raw.get("timeout_seconds", 30)),
