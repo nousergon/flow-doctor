@@ -10,17 +10,70 @@ from flow_doctor.fix.prompts import SYSTEM_PROMPT, build_fix_prompt
 
 
 class FixGenerator:
-    """Generates fix diffs using an LLM."""
+    """Generates fix diffs using an LLM.
+
+    ``provider`` mirrors ``DiagnosisConfig.provider``: ``"anthropic"`` (native
+    SDK, the default) or ``"openai_compat"`` (any OpenAI-compatible
+    chat-completions endpoint — OpenRouter open-weight models, OpenAI,
+    self-hosted vLLM — selected via ``base_url``). Both transports run the
+    same prompts and return the same plain-text diff contract.
+    """
 
     def __init__(
         self,
         api_key: str,
         model: str = DEFAULT_DIAGNOSIS_MODEL,
         timeout_seconds: int = 60,
+        provider: str = "anthropic",
+        base_url: str = "https://openrouter.ai/api/v1",
     ):
+        if provider not in ("anthropic", "openai_compat"):
+            raise ValueError(
+                f"FixGenerator provider must be 'anthropic' or 'openai_compat', "
+                f"got '{provider}'"
+            )
         self.api_key = api_key
         self.model = model
         self.timeout_seconds = timeout_seconds
+        self.provider = provider
+        self.base_url = base_url
+
+    def _complete_anthropic(self, user_prompt: str) -> str:
+        import anthropic
+
+        client = anthropic.Anthropic(
+            api_key=self.api_key,
+            timeout=self.timeout_seconds,
+        )
+        response = client.messages.create(
+            model=self.model,
+            max_tokens=4096,
+            system=SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": user_prompt}],
+        )
+        text = ""
+        for block in response.content:
+            if block.type == "text":
+                text += block.text
+        return text
+
+    def _complete_openai_compat(self, user_prompt: str) -> str:
+        from openai import OpenAI
+
+        client = OpenAI(
+            api_key=self.api_key,
+            base_url=self.base_url,
+            timeout=self.timeout_seconds,
+        )
+        response = client.chat.completions.create(
+            model=self.model,
+            max_tokens=4096,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt},
+            ],
+        )
+        return response.choices[0].message.content or ""
 
     def generate(
         self,
@@ -38,13 +91,6 @@ class FixGenerator:
         Returns:
             The unified diff string, or None if the LLM cannot produce a fix.
         """
-        import anthropic
-
-        client = anthropic.Anthropic(
-            api_key=self.api_key,
-            timeout=self.timeout_seconds,
-        )
-
         user_prompt = build_fix_prompt(
             category=category,
             root_cause=root_cause,
@@ -56,17 +102,10 @@ class FixGenerator:
             prior_rejections=prior_rejections,
         )
 
-        response = client.messages.create(
-            model=self.model,
-            max_tokens=4096,
-            system=SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": user_prompt}],
-        )
-
-        text = ""
-        for block in response.content:
-            if block.type == "text":
-                text += block.text
+        if self.provider == "openai_compat":
+            text = self._complete_openai_compat(user_prompt)
+        else:
+            text = self._complete_anthropic(user_prompt)
 
         text = text.strip()
 

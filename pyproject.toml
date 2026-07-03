@@ -55,6 +55,9 @@ dependencies = [
 [project.optional-dependencies]
 slack = ["requests>=2.28"]
 diagnosis = ["anthropic>=0.40"]
+# OpenAI-compatible diagnosis/fix transport (OpenRouter open-weight models,
+# OpenAI, self-hosted vLLM) — diagnosis.provider: openai_compat.
+diagnosis-openai = ["openai>=1.40"]
 remediation = ["boto3>=1.26"]
 s3 = ["boto3>=1.26"]
 agent = ["claude-agent-sdk>=0.1", "anthropic>=0.40"]
