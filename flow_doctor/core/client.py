@@ -471,19 +471,43 @@ class FlowDoctor:
         )
 
         if config.diagnosis.enabled and config.diagnosis.api_key:
-            try:
-                from flow_doctor.diagnosis.provider import AnthropicProvider
-                self._diagnosis_provider = AnthropicProvider(
-                    api_key=config.diagnosis.api_key,
-                    model=config.diagnosis.model,
-                    confidence_calibration=config.diagnosis.confidence_calibration,
-                    timeout_seconds=config.diagnosis.timeout_seconds,
-                )
-            except ImportError:
-                print(
-                    "[flow-doctor] WARNING: anthropic package not installed, diagnosis disabled. "
-                    "Install with: pip install flow-doctor[diagnosis]",
-                    file=sys.stderr,
+            if config.diagnosis.provider == "openai_compat":
+                try:
+                    from flow_doctor.diagnosis.provider import OpenAICompatProvider
+                    self._diagnosis_provider = OpenAICompatProvider(
+                        api_key=config.diagnosis.api_key,
+                        model=config.diagnosis.model,
+                        base_url=config.diagnosis.base_url,
+                        confidence_calibration=config.diagnosis.confidence_calibration,
+                        timeout_seconds=config.diagnosis.timeout_seconds,
+                        price_in_per_1m=config.diagnosis.price_in_per_1m,
+                        price_out_per_1m=config.diagnosis.price_out_per_1m,
+                    )
+                except ImportError:
+                    print(
+                        "[flow-doctor] WARNING: openai package not installed, diagnosis disabled. "
+                        "Install with: pip install flow-doctor[diagnosis-openai]",
+                        file=sys.stderr,
+                    )
+            elif config.diagnosis.provider == "anthropic":
+                try:
+                    from flow_doctor.diagnosis.provider import AnthropicProvider
+                    self._diagnosis_provider = AnthropicProvider(
+                        api_key=config.diagnosis.api_key,
+                        model=config.diagnosis.model,
+                        confidence_calibration=config.diagnosis.confidence_calibration,
+                        timeout_seconds=config.diagnosis.timeout_seconds,
+                    )
+                except ImportError:
+                    print(
+                        "[flow-doctor] WARNING: anthropic package not installed, diagnosis disabled. "
+                        "Install with: pip install flow-doctor[diagnosis]",
+                        file=sys.stderr,
+                    )
+            else:
+                raise ConfigError(
+                    f"diagnosis.provider must be 'anthropic' or 'openai_compat', "
+                    f"got '{config.diagnosis.provider}'"
                 )
 
     def _init_remediation(self, config: FlowDoctorConfig) -> None:

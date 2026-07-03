@@ -270,20 +270,27 @@ def generate_fix(
     except Exception:
         pass
 
-    # Generate fix via LLM
+    # Generate fix via LLM — same provider/base_url the diagnosis runs on.
+    provider = config.diagnosis.provider
+    key_env = "OPENROUTER_API_KEY" if provider == "openai_compat" else "ANTHROPIC_API_KEY"
     api_key = (
         config.diagnosis.api_key
-        or os.environ.get("ANTHROPIC_API_KEY")
+        or os.environ.get(key_env)
     )
     if not api_key:
-        msg = "No Anthropic API key configured"
+        msg = f"No LLM API key configured (diagnosis.api_key or {key_env})"
         _comment_failure(repo, issue_number, token, msg)
         return (FixOutcome.FAILED, msg)
 
     model = af_config.model or config.diagnosis.model
-    print(f"[flow-doctor] Generating fix with {model}...")
+    print(f"[flow-doctor] Generating fix with {provider}:{model}...")
 
-    generator = FixGenerator(api_key=api_key, model=model)
+    generator = FixGenerator(
+        api_key=api_key,
+        model=model,
+        provider=provider,
+        base_url=config.diagnosis.base_url,
+    )
     diff = generator.generate(
         category=category,
         root_cause=root_cause,

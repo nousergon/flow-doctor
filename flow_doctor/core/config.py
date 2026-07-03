@@ -112,9 +112,18 @@ class RateLimitConfig(_ConfigModel):
 
 class DiagnosisConfig(_ConfigModel):
     enabled: bool = False
+    # "anthropic" (native SDK) or "openai_compat" (any OpenAI-compatible
+    # chat-completions endpoint: OpenRouter open-weight models, OpenAI,
+    # self-hosted vLLM — set base_url + model accordingly).
     provider: str = "anthropic"
     model: str = DEFAULT_DIAGNOSIS_MODEL
     api_key: Optional[str] = None
+    # openai_compat only. base_url defaults to OpenRouter. The per-1M prices
+    # are REQUIRED for non-OpenRouter endpoints (OpenRouter reports its own
+    # billed cost) — they keep the max_daily_cost_usd cap honest.
+    base_url: str = "https://openrouter.ai/api/v1"
+    price_in_per_1m: Optional[float] = None
+    price_out_per_1m: Optional[float] = None
     confidence_calibration: float = 0.85
     timeout_seconds: int = 30
     max_daily_cost_usd: float = 1.00  # Hard cap on daily LLM spend
@@ -434,6 +443,15 @@ def load_config(
             provider=diag_raw.get("provider", "anthropic"),
             model=diag_raw.get("model", DEFAULT_DIAGNOSIS_MODEL),
             api_key=diag_raw.get("api_key"),
+            base_url=diag_raw.get("base_url", "https://openrouter.ai/api/v1"),
+            price_in_per_1m=(
+                float(diag_raw["price_in_per_1m"])
+                if diag_raw.get("price_in_per_1m") is not None else None
+            ),
+            price_out_per_1m=(
+                float(diag_raw["price_out_per_1m"])
+                if diag_raw.get("price_out_per_1m") is not None else None
+            ),
             confidence_calibration=float(diag_raw.get("confidence_calibration", 0.85)),
             timeout_seconds=int(diag_raw.get("timeout_seconds", 30)),
             max_daily_cost_usd=float(diag_raw.get("max_daily_cost_usd", 1.00)),
