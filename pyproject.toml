@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "flow-doctor"
-version = "0.6.2"
+version = "0.7.0"
 description = "Pipeline error handler: capture, deduplicate, diagnose, and auto-fix failures."
 readme = "README.md"
 requires-python = ">=3.9"
