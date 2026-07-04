@@ -112,6 +112,8 @@ class StoreConfig(_ConfigModel):
     path: str = "flow_doctor.db"
     bucket: Optional[str] = None
     prefix: Optional[str] = None
+    table_name: Optional[str] = None
+    region: Optional[str] = None
 
 
 class RateLimitConfig(_ConfigModel):
@@ -365,6 +367,8 @@ def _parse_store(raw: Any) -> StoreConfig:
         if raw.startswith("s3://"):
             parts = raw[len("s3://"):].split("/", 1)
             return StoreConfig(type="s3", bucket=parts[0], prefix=parts[1] if len(parts) > 1 else "")
+        if raw.startswith("dynamodb://"):
+            return StoreConfig(type="dynamodb", table_name=raw[len("dynamodb://"):])
         return StoreConfig(type="sqlite", path=raw)
     if isinstance(raw, dict):
         raw = _resolve_dict(raw)
@@ -373,6 +377,8 @@ def _parse_store(raw: Any) -> StoreConfig:
             path=raw.get("path", "flow_doctor.db"),
             bucket=raw.get("bucket"),
             prefix=raw.get("prefix"),
+            table_name=raw.get("table_name"),
+            region=raw.get("region"),
         )
     return StoreConfig()
 

@@ -158,6 +158,25 @@ def test_store_string_s3():
     assert config.store.prefix == "flow-doctor/"
 
 
+def test_store_string_dynamodb():
+    config = load_config(
+        flow_name="test",
+        store="dynamodb://flow-doctor-store",
+    )
+    assert config.store.type == "dynamodb"
+    assert config.store.table_name == "flow-doctor-store"
+
+
+def test_store_dict_dynamodb_with_region():
+    config = load_config(
+        flow_name="test",
+        store={"type": "dynamodb", "table_name": "fd-table", "region": "us-west-2"},
+    )
+    assert config.store.type == "dynamodb"
+    assert config.store.table_name == "fd-table"
+    assert config.store.region == "us-west-2"
+
+
 def test_kwargs_override_yaml():
     yaml_content = """
 flow_name: from-yaml

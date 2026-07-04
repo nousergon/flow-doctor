@@ -293,6 +293,20 @@ class FlowDoctor:
             store = SQLiteStorage(config.store.path)
             store.init_schema()
             return store
+        if config.store.type == "dynamodb":
+            if not config.store.table_name:
+                raise ConfigError(
+                    "dynamodb store requires table_name "
+                    "(e.g. store: dynamodb://flow-doctor-store or "
+                    "store: {type: dynamodb, table_name: flow-doctor-store})"
+                )
+            from flow_doctor.storage.dynamodb import DynamoDBStorage
+            store = DynamoDBStorage(
+                table_name=config.store.table_name,
+                region=config.store.region,
+            )
+            store.init_schema()
+            return store
         raise ValueError(f"Unsupported store type: {config.store.type}")
 
     @staticmethod
@@ -677,6 +691,124 @@ class FlowDoctor:
         except Exception as exc:
             print(f"[flow-doctor] notify_success() error: {exc}", file=sys.stderr)
             return None
+
+    def notify_event(
+        self,
+        subject: str,
+        body: Optional[str] = None,
+        *,
+        severity: str = Severity.INFO.value,
+        context: Optional[Dict[str, Any]] = None,
+        dedup_key: Optional[str] = None,
+    ) -> Optional[str]:
+        """Emit an intentional non-error event (trade alert, SF milestone, etc.).
+
+        Unlike :meth:`notify_success` (always ``INFO`` completion pings), this
+        API accepts any ``severity`` and optional ``dedup_key`` for cross-call
+        deduplication — the path fleet producers use for Telegram routing
+        without misusing ``report()`` on non-exception traffic.
+
+        When ``dedup_key`` is set, the signature is derived from it (same
+        normalization as log-message dedup). When unset, no dedup is applied
+        (mirrors :meth:`notify_success`). Diagnosis and remediation run only
+        for ``critical`` / ``error`` severities.
+
+        Args:
+            subject: Short headline (``Report.error_message``).
+            body: Optional detail text (``Report.logs``).
+            severity: One of ``critical``, ``error``, ``warning``, ``info``.
+            context: Arbitrary key-value metadata.
+            dedup_key: Optional stable key for dedup/rate-limit signature.
+
+        Returns:
+            The report ID, ``None`` if suppressed by dedup or on internal error.
+            Never raises.
+        """
+        try:
+            return self._do_notify_event(
+                subject,
+                body,
+                severity=severity,
+                context=context,
+                dedup_key=dedup_key,
+            )
+        except Exception as exc:
+            print(f"[flow-doctor] notify_event() error: {exc}", file=sys.stderr)
+            return None
+
+    async def notify_event_async(
+        self,
+        subject: str,
+        body: Optional[str] = None,
+        *,
+        severity: str = Severity.INFO.value,
+        context: Optional[Dict[str, Any]] = None,
+        dedup_key: Optional[str] = None,
+    ) -> Optional[str]:
+        """Async counterpart of :meth:`notify_event`."""
+        import asyncio
+
+        try:
+            return await asyncio.to_thread(
+                self.notify_event,
+                subject,
+                body,
+                severity=severity,
+                context=context,
+                dedup_key=dedup_key,
+            )
+        except Exception as exc:
+            print(f"[flow-doctor] notify_event_async() error: {exc}", file=sys.stderr)
+            return None
+
+    def _do_notify_event(
+        self,
+        subject: str,
+        body: Optional[str],
+        *,
+        severity: str,
+        context: Optional[Dict[str, Any]],
+        dedup_key: Optional[str],
+    ) -> Optional[str]:
+        """Internal notify_event implementation with optional dedup."""
+        enriched_context = self._build_context(context)
+        error_signature: Optional[str] = None
+        if dedup_key:
+            error_signature = compute_signature_from_message(dedup_key)
+
+        if error_signature and self._dedup:
+            is_dup, existing_id = self._dedup.is_duplicate(error_signature)
+            if is_dup and existing_id:
+                self._dedup.record_dedup_hit(existing_id)
+                self._record_decision(
+                    report_id=existing_id,
+                    error_signature=error_signature,
+                    reason=DecisionReason.DEDUPED.value,
+                )
+                return None
+
+        report = Report(
+            flow_name=self.config.flow_name,
+            severity=severity,
+            error_message=subject,
+            logs=body,
+            context=enriched_context,
+            error_signature=error_signature,
+        )
+        if self._store:
+            self._store.save_report(report)
+
+        diagnosis = None
+        if severity in (Severity.CRITICAL.value, Severity.ERROR.value):
+            diagnosis = self._run_diagnosis(report, cascade_source=None)
+
+        dispatch = self._send_notifications(report, is_cascade=False, diagnosis=diagnosis)
+        self._record_decision(
+            report_id=report.id,
+            error_signature=error_signature,
+            reason=_classify_dispatch(dispatch),
+        )
+        return report.id
 
     async def notify_success_async(
         self,

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import io
 import json
+import sys
 import tempfile
 from unittest.mock import MagicMock, patch
 
@@ -205,6 +206,27 @@ def test_send_payload_omits_message_thread_id_when_unset():
         notifier.send(_make_report(), "morning-signal")
     payload = json.loads(mock_urlopen.call_args[0][0].data.decode("utf-8"))
     assert "message_thread_id" not in payload
+
+
+def test_send_prefers_krepis_transport_when_available():
+    """When krepis is installed, TelegramNotifier delegates delivery to
+    krepis.telegram.send_message with explicit bot/chat/thread overrides."""
+    notifier = TelegramNotifier(
+        bot_token="123:abc", chat_id=-100, message_thread_id=7
+    )
+    mock_send = MagicMock(return_value=True)
+    mock_tg = MagicMock(send_message=mock_send)
+    mock_krepis = MagicMock(telegram=mock_tg)
+    with patch("flow_doctor.notify.telegram.urlopen") as mock_urlopen:
+        with patch.dict(sys.modules, {"krepis": mock_krepis, "krepis.telegram": mock_tg}):
+            target = notifier.send(_make_report(), "morning-signal")
+    mock_send.assert_called_once()
+    kwargs = mock_send.call_args.kwargs
+    assert kwargs["bot_token"] == "123:abc"
+    assert kwargs["chat_id"] == -100
+    assert kwargs["message_thread_id"] == 7
+    mock_urlopen.assert_not_called()
+    assert target == "telegram:-100:7"
 
 
 def test_send_disable_notification_flag_passes_through():
