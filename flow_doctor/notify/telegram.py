@@ -77,26 +77,53 @@ class TelegramNotifier(Notifier):
 
     # ----- public API -----------------------------------------------------
 
-    def send(
-        self,
-        report: Report,
-        flow_name: str,
-        diagnosis: Optional[Diagnosis] = None,
-    ) -> Optional[str]:
-        try:
-            text = self._format_message(report, flow_name, diagnosis)
-            text = _truncate(text)
-            payload = {
-                "chat_id": self.chat_id,
-                "text": text,
-            }
-            if self.parse_mode:
-                payload["parse_mode"] = self.parse_mode
-            if self.message_thread_id is not None:
-                payload["message_thread_id"] = self.message_thread_id
-            if self.disable_notification:
-                payload["disable_notification"] = True
+    def _target_id(self) -> str:
+        target = f"telegram:{self.chat_id}"
+        if self.message_thread_id is not None:
+            target += f":{self.message_thread_id}"
+        return target
 
+    def _deliver_text(
+        self,
+        text: str,
+        *,
+        parse_mode: Any = _UNSET,
+        disable_notification: Any = _UNSET,
+    ) -> bool:
+        """POST text to Telegram; prefer krepis transport when installed."""
+        mode = self.parse_mode if parse_mode is _UNSET else parse_mode
+        quiet = (
+            self.disable_notification
+            if disable_notification is _UNSET
+            else disable_notification
+        )
+        try:
+            from krepis.telegram import send_message as krepis_send
+        except ImportError:
+            krepis_send = None  # type: ignore[assignment]
+
+        if krepis_send is not None and mode in (None, "Markdown", "MarkdownV2"):
+            # krepis handles Markdown v1 escape + optional forum topic routing.
+            return krepis_send(
+                text,
+                disable_notification=bool(quiet),
+                bot_token=self.bot_token,
+                chat_id=self.chat_id,
+                message_thread_id=self.message_thread_id,
+            )
+
+        payload: dict = {
+            "chat_id": self.chat_id,
+            "text": text,
+        }
+        if mode:
+            payload["parse_mode"] = mode
+        if self.message_thread_id is not None:
+            payload["message_thread_id"] = self.message_thread_id
+        if quiet:
+            payload["disable_notification"] = True
+
+        try:
             data = json.dumps(payload).encode("utf-8")
             req = Request(
                 f"{self._API_BASE}/bot{self.bot_token}/sendMessage",
@@ -105,31 +132,23 @@ class TelegramNotifier(Notifier):
                 method="POST",
             )
             with urlopen(req, timeout=10) as resp:
-                if resp.status == 200:
-                    body = resp.read().decode("utf-8", errors="replace")
-                    try:
-                        parsed = json.loads(body)
-                    except json.JSONDecodeError:
-                        parsed = {}
-                    if parsed.get("ok"):
-                        # Return a stable, non-secret target identifier so
-                        # the action target can be stored without leaking
-                        # the bot token. ``chat_id`` is enough to identify
-                        # the destination on a per-install basis.
-                        target = f"telegram:{self.chat_id}"
-                        if self.message_thread_id is not None:
-                            target += f":{self.message_thread_id}"
-                        return target
-                    description = parsed.get("description", "unknown")
+                if resp.status != 200:
+                    _logger.critical(
+                        "flow-doctor Telegram API returned HTTP %s", resp.status,
+                    )
+                    return False
+                body = resp.read().decode("utf-8", errors="replace")
+                try:
+                    parsed = json.loads(body)
+                except json.JSONDecodeError:
+                    return False
+                if not parsed.get("ok"):
                     _logger.critical(
                         "flow-doctor Telegram API returned ok=false: %s",
-                        description,
+                        parsed.get("description", "unknown"),
                     )
-                    return None
-                _logger.critical(
-                    "flow-doctor Telegram API returned HTTP %s", resp.status,
-                )
-                return None
+                    return False
+                return True
         except URLError as e:
             _logger.critical(
                 "flow-doctor Telegram notification failed (network): %s",
@@ -139,6 +158,29 @@ class TelegramNotifier(Notifier):
                 f"[flow-doctor] Telegram notification failed: {e}",
                 file=sys.stderr,
             )
+            return False
+        except Exception as e:
+            _logger.critical(
+                "flow-doctor Telegram notification failed: %s",
+                e, exc_info=True,
+            )
+            print(
+                f"[flow-doctor] Telegram notification failed: {e}",
+                file=sys.stderr,
+            )
+            return False
+
+    def send(
+        self,
+        report: Report,
+        flow_name: str,
+        diagnosis: Optional[Diagnosis] = None,
+    ) -> Optional[str]:
+        try:
+            text = self._format_message(report, flow_name, diagnosis)
+            text = _truncate(text)
+            if self._deliver_text(text):
+                return self._target_id()
             return None
         except Exception as e:
             _logger.critical(
@@ -175,57 +217,13 @@ class TelegramNotifier(Notifier):
         distinguish "use instance default" from "explicit None".
         """
         text = _truncate(text)
-        payload: dict = {
-            "chat_id": self.chat_id,
-            "text": text,
-        }
-        mode = self.parse_mode if parse_mode is _UNSET else parse_mode
-        if mode:
-            payload["parse_mode"] = mode
-        if self.message_thread_id is not None:
-            payload["message_thread_id"] = self.message_thread_id
-        quiet = (
-            self.disable_notification
-            if disable_notification is _UNSET
-            else disable_notification
-        )
-        if quiet:
-            payload["disable_notification"] = True
-
-        try:
-            data = json.dumps(payload).encode("utf-8")
-            req = Request(
-                f"{self._API_BASE}/bot{self.bot_token}/sendMessage",
-                data=data,
-                headers={"Content-Type": "application/json"},
-                method="POST",
-            )
-            with urlopen(req, timeout=10) as resp:
-                if resp.status == 200:
-                    body = resp.read().decode("utf-8", errors="replace")
-                    try:
-                        parsed = json.loads(body)
-                    except json.JSONDecodeError:
-                        parsed = {}
-                    if parsed.get("ok"):
-                        target = f"telegram:{self.chat_id}"
-                        if self.message_thread_id is not None:
-                            target += f":{self.message_thread_id}"
-                        return target
-                    _logger.critical(
-                        "flow-doctor Telegram send_raw ok=false: %s",
-                        parsed.get("description", "unknown"),
-                    )
-                    return None
-                _logger.critical(
-                    "flow-doctor Telegram send_raw HTTP %s", resp.status,
-                )
-                return None
-        except Exception as e:
-            _logger.warning(
-                "flow-doctor Telegram send_raw failed: %s", e,
-            )
-            return None
+        if self._deliver_text(
+            text,
+            parse_mode=parse_mode,
+            disable_notification=disable_notification,
+        ):
+            return self._target_id()
+        return None
 
     def validate(self) -> None:
         """Preflight: confirm the bot token is valid via ``getMe``.

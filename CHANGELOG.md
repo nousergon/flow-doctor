@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.8.1 (2026-07-04)
+
+### Added
+
+- **`notify_event()` / `notify_event_async()`** — intentional non-error
+  notifications (trade alerts, SF milestones) with optional `dedup_key`
+  for cross-call deduplication. Fleet producers route through flow-doctor
+  without misusing `report()` on non-exception traffic (config#1739).
+- **DynamoDB storage backend** (`store: dynamodb://{table}` or
+  `{type: dynamodb, table_name: ...}`) — shared dedup/rate-limit state
+  across Lambda invocations. `init_schema()` creates the table in dev/moto;
+  production uses IaC.
+- **Telegram notifier → krepis transport** — when `krepis` is installed,
+  `TelegramNotifier` delegates to `krepis.telegram.send_message` with
+  explicit `bot_token` / `chat_id` / `message_thread_id` overrides;
+  urllib fallback remains for self-host installs without krepis.
+
 ## 0.8.0 (unreleased)
 
 ### Added
