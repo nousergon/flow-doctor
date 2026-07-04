@@ -18,6 +18,17 @@ class Notifier(ABC):
     # notifier subclasses inherit this attribute and need not set it.
     notify_on: Optional[Set[str]] = None
 
+    # Diagnosis-category routing for this notifier instance, set by
+    # ``FlowDoctor._init_notifiers`` from the config's ``notify_on_category``.
+    # A set of uppercased category strings (e.g. {"CODE", "CONFIG"}); when
+    # None, every category reaches this notifier (unchanged pre-0.8.0
+    # behavior). Requires Phase 2 diagnosis to be enabled — a report with no
+    # diagnosis always passes this gate regardless of what's configured
+    # here, since an unavailable enrichment must never silently blank a
+    # channel. Custom notifier subclasses inherit this attribute and need
+    # not set it.
+    notify_on_category: Optional[Set[str]] = None
+
     @abstractmethod
     def send(
         self,

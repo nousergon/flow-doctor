@@ -54,6 +54,19 @@ class NotifyChannelConfig(_ConfigModel):
     # pings on this channel, or ["warning"] to fan ad-hoc warnings to a
     # separate channel. See FlowDoctor._send_notifications.
     notify_on: Optional[List[str]] = None
+    # Per-notifier diagnosis-category routing (requires Phase 2 diagnosis
+    # enabled — see DiagnosisConfig). When None, this gate is a no-op and
+    # every category reaches the notifier (unchanged pre-0.8.0 behavior).
+    # When set (e.g. ["code", "config"]), the notifier only fires for
+    # reports whose diagnosis lands in one of these categories — lets a
+    # noisy channel (a GitHub issue tracker, a human backlog) opt in to
+    # only human-actionable defects while a cheap channel (Telegram/SNS)
+    # still pages on everything. If diagnosis didn't run or is unavailable
+    # for a given report, the gate is skipped and the notifier fires as if
+    # unset — an optional enrichment must never silently blank out an
+    # entire channel when its own prerequisite isn't met. See
+    # FlowDoctor._send_notifications and DiagnosisConfig.
+    notify_on_category: Optional[List[str]] = None
     # Slack fields
     webhook_url: Optional[str] = None
     channel: Optional[str] = None
@@ -313,6 +326,7 @@ def _parse_notify_dicts(items: List[Dict]) -> List[NotifyChannelConfig]:
         configs.append(NotifyChannelConfig(
             type=item.get("type", "slack"),
             notify_on=item.get("notify_on"),
+            notify_on_category=item.get("notify_on_category"),
             webhook_url=item.get("webhook_url"),
             channel=item.get("channel"),
             sender=item.get("sender"),

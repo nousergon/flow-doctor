@@ -36,6 +36,15 @@ class _NotifierConfigBase(BaseModel):
     # pings (notify_success) on this channel.
     notify_on: Optional[List[str]] = None
 
+    # Per-notifier diagnosis-category routing, shared by every channel.
+    # Requires Phase 2 diagnosis enabled (DiagnosisConfig.enabled=True) — a
+    # report without a diagnosis always passes this gate. When set (e.g.
+    # ["code", "config"]), lets a noisy/curated channel (a GitHub issue
+    # tracker, a human backlog) opt in to only human-actionable defects
+    # while a cheap channel (Telegram/SNS) still pages on everything else
+    # (transient/external/infra noise). See FlowDoctor._send_notifications.
+    notify_on_category: Optional[List[str]] = None
+
 
 class SlackNotifierConfig(_NotifierConfigBase):
     type: Literal["slack"] = "slack"
@@ -46,6 +55,7 @@ class SlackNotifierConfig(_NotifierConfigBase):
         return NotifyChannelConfig(
             type="slack",
             notify_on=self.notify_on,
+            notify_on_category=self.notify_on_category,
             webhook_url=self.webhook_url,
             channel=self.channel,
         )
@@ -78,6 +88,7 @@ class EmailNotifierConfig(_NotifierConfigBase):
         return NotifyChannelConfig(
             type="email",
             notify_on=self.notify_on,
+            notify_on_category=self.notify_on_category,
             sender=self.sender,
             recipients=self.recipients,  # already CSV after the validator
             smtp_host=self.smtp_host,
@@ -105,6 +116,7 @@ class GitHubNotifierConfig(_NotifierConfigBase):
         return NotifyChannelConfig(
             type="github",
             notify_on=self.notify_on,
+            notify_on_category=self.notify_on_category,
             repo=self.repo,
             token=self.token,
             labels=self.labels,
@@ -126,6 +138,7 @@ class S3NotifierConfig(_NotifierConfigBase):
         return NotifyChannelConfig(
             type="s3",
             notify_on=self.notify_on,
+            notify_on_category=self.notify_on_category,
             bucket=self.bucket,
             subsystem=self.subsystem,
             entry_prefix=self.entry_prefix,
@@ -163,6 +176,7 @@ class TelegramNotifierConfig(_NotifierConfigBase):
         return NotifyChannelConfig(
             type="telegram",
             notify_on=self.notify_on,
+            notify_on_category=self.notify_on_category,
             bot_token=self.bot_token,
             chat_id=self.chat_id,
             message_thread_id=self.message_thread_id,
