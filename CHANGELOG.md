@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.8.0 (unreleased)
+
+### Added
+
+- **Per-notifier diagnosis-category routing** (`notify_on_category`, on the
+  omnibus `NotifyChannelConfig` and every typed `*NotifierConfig`). Mirrors
+  the existing `notify_on` severity gate but filters on the Phase-2
+  diagnosis category (`TRANSIENT`/`DATA`/`CODE`/`CONFIG`/`EXTERNAL`/
+  `INFRA`) instead of severity. Lets a curated channel (e.g. GitHub issues
+  feeding a real backlog) opt in to only human-actionable categories while
+  a cheap channel (Telegram/SNS) still fans out on everything else. A
+  report with no diagnosis (feature disabled, or the diagnosis call
+  itself failed) always passes the gate — an unavailable enrichment must
+  never silently blank a channel. New `DecisionReason.CATEGORY_FILTERED`
+  distinguishes this from `SEVERITY_FILTERED` in `status()`/`log_summary()`.
+- **`auto_fix_pr` cross-repo misconfiguration warning.** Since the
+  `flow-doctor-fix` Actions workflow can only trigger on an `issues:
+  labeled` event in the repo it lives in, pointing a github notifier's
+  `repo` at a different repo than the app's own (`FlowDoctorConfig.repo` /
+  `.with_repo(...)`) while `auto_fix_pr=True` silently drops auto-fix. Flow
+  Doctor now logs a `WARNING` at init naming both repos, so redirecting
+  issues to a centralized backlog doesn't quietly break auto-fix.
+
 ## 0.6.2 (unreleased)
 
 ### Added

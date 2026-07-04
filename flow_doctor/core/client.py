@@ -107,7 +107,8 @@ def _classify_dispatch(d: Dict[str, int]) -> str:
 
     Priority: any successful send -> fired; else all matching notifiers
     rate-limited -> rate_limited; else every attempt failed -> delivery_failed;
-    else nothing matched the severity -> severity_filtered; else nothing was
+    else nothing matched the severity -> severity_filtered; else nothing
+    matched the diagnosis category -> category_filtered; else nothing was
     configured to receive it -> no_notifiers.
     """
     if d.get("sent", 0) > 0:
@@ -118,6 +119,8 @@ def _classify_dispatch(d: Dict[str, int]) -> str:
         return DecisionReason.RATE_LIMITED.value
     if d.get("severity_skipped", 0) > 0:
         return DecisionReason.SEVERITY_FILTERED.value
+    if d.get("category_skipped", 0) > 0:
+        return DecisionReason.CATEGORY_FILTERED.value
     return DecisionReason.NO_NOTIFIERS.value
 
 
@@ -130,6 +133,20 @@ def _normalize_notify_on(raw: Optional[List[str]]) -> Optional[FrozenSet[str]]:
     if not raw:
         return None
     return frozenset(str(s).strip().lower() for s in raw if str(s).strip())
+
+
+def _normalize_notify_on_category(raw: Optional[List[str]]) -> Optional[FrozenSet[str]]:
+    """Normalize a config ``notify_on_category`` list into a category set, or None.
+
+    None / empty means "no category gate" — every category (and every report
+    with no diagnosis) reaches the notifier. Values are upper-cased and
+    stripped so ``["code", " Config "]`` matches the diagnosis provider's
+    category strings (``TRANSIENT``/``DATA``/``CODE``/``CONFIG``/
+    ``EXTERNAL``/``INFRA``), case-insensitively.
+    """
+    if not raw:
+        return None
+    return frozenset(str(s).strip().upper() for s in raw if str(s).strip())
 
 
 class _LogCaptureHandler(logging.Handler):
@@ -363,11 +380,31 @@ class FlowDoctor:
                     )
                 from flow_doctor.notify.github import GitHubNotifier
                 labels = nc.labels or (config.github.labels if config.github else ["flow-doctor"])
+                auto_fix_pr = getattr(nc, "auto_fix_pr", False)
+                # The flow-doctor-fix GitHub Actions workflow triggers on an
+                # `issues: labeled` event IN THE REPO IT LIVES IN — GitHub
+                # gives no way to fire it from a differently-named repo's
+                # issue without a self-built cross-repo relay. Redirecting
+                # the issue destination (e.g. to a centralized backlog repo)
+                # is fine for triage, but silently drops auto-fix — warn
+                # loudly rather than let that surprise someone at incident
+                # time. config.repo is this app's own repo (top-level
+                # FlowDoctorConfig.repo); only compare when it's set.
+                if auto_fix_pr and config.repo and repo != config.repo:
+                    _logger.warning(
+                        "%s: auto_fix_pr=True with repo=%r different from this "
+                        "app's own repo=%r. The flow-doctor-fix Actions workflow "
+                        "only fires on an issues:labeled event in the repo it "
+                        "lives in, so no fix PR will be generated unless you've "
+                        "built a cross-repo relay (e.g. repository_dispatch). "
+                        "The issue will still be filed at %s for triage.",
+                        label, repo, config.repo, repo,
+                    )
                 notifiers.append(GitHubNotifier(
                     repo=repo,
                     token=token,
                     labels=labels,
-                    auto_fix_pr=getattr(nc, "auto_fix_pr", False),
+                    auto_fix_pr=auto_fix_pr,
                     fix_label=getattr(nc, "fix_label", "flow-doctor:fix"),
                 ))
 
@@ -449,12 +486,16 @@ class FlowDoctor:
                     f"Supported types: slack, email, github, s3, telegram."
                 )
 
-            # Stamp the per-notifier severity routing onto whatever was just
-            # built this iteration (the github auto_create_issue=False branch
-            # ``continue``s without appending, so guard on the count).
+            # Stamp the per-notifier severity + category routing onto
+            # whatever was just built this iteration (the github
+            # auto_create_issue=False branch ``continue``s without
+            # appending, so guard on the count).
             if len(notifiers) > before:
                 notifiers[-1].notify_on = _normalize_notify_on(
                     getattr(nc, "notify_on", None)
+                )
+                notifiers[-1].notify_on_category = _normalize_notify_on_category(
+                    getattr(nc, "notify_on_category", None)
                 )
 
         return notifiers
@@ -1023,8 +1064,8 @@ class FlowDoctor:
         """Send notifications, respecting rate limits.
 
         Returns a dispatch tally ``{attempted, sent, failed, degraded,
-        severity_skipped}`` so the caller can record exactly why this error
-        did or did not produce an alert.
+        severity_skipped, category_skipped}`` so the caller can record
+        exactly why this error did or did not produce an alert.
 
         Failures are logged at CRITICAL via the ``flow_doctor`` logger so
         they surface in the host app's log stream (journalctl, Sentry,
@@ -1040,11 +1081,25 @@ class FlowDoctor:
         channels that explicitly opt in, while critical/error still fan out
         everywhere by default. A notifier skipped by severity does not count
         toward attempted/failed — it intentionally isn't a recipient.
+
+        Category routing is per-notifier and applies AFTER severity: a
+        notifier with ``notify_on_category`` set only receives reports whose
+        diagnosis (Phase 2, optional) lands in one of those categories. This
+        is what lets a curated/noisy channel (e.g. a GitHub issue tracker
+        feeding a human backlog) opt in to only human-actionable categories
+        (CODE/CONFIG) while a cheap paging channel (Telegram/SNS) still fans
+        out on the rest (TRANSIENT/EXTERNAL/INFRA). If diagnosis is
+        unavailable for this report (feature disabled, or the diagnosis call
+        itself failed), the category gate is skipped entirely and the
+        notifier fires as if ``notify_on_category`` were unset — a report
+        that failed to get diagnosed must never be silently dropped by a
+        gate that depends on that diagnosis.
         """
         attempted = 0
         sent = 0
         degraded = 0
         severity_skipped = 0
+        category_skipped = 0
         failed: List[str] = []
 
         for notifier in self._notifiers:
@@ -1052,6 +1107,12 @@ class FlowDoctor:
             if report.severity not in effective_notify_on:
                 severity_skipped += 1
                 continue
+
+            if notifier.notify_on_category and diagnosis is not None:
+                report_category = (diagnosis.category or "").strip().upper()
+                if report_category not in notifier.notify_on_category:
+                    category_skipped += 1
+                    continue
 
             from flow_doctor.notify.slack import SlackNotifier
             from flow_doctor.notify.email import EmailNotifier
@@ -1146,6 +1207,7 @@ class FlowDoctor:
             "failed": len(failed),
             "degraded": degraded,
             "severity_skipped": severity_skipped,
+            "category_skipped": category_skipped,
         }
 
     @contextmanager

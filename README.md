@@ -124,6 +124,37 @@ fd.notify_success("morning-signal done", body="42 stories, 3 searches")
 
 `notify_on` is per-notifier. When unset it defaults to `{critical, error}` (warnings and info are skipped), so existing failure-only channels are unaffected. Use it to fan failures to one channel and success/warnings to another. An async `notify_success_async(...)` mirrors `report_async`.
 
+## Category routing — separating capture from alert
+
+Every notifier also has a diagnosis-category filter, **`notify_on_category`**, applied after severity. It requires [LLM diagnosis](#llm-diagnosis) to be enabled — when a report has no diagnosis (feature off, or the diagnosis call itself failed), the gate is skipped and the notifier fires as if unset, so an unavailable enrichment never silently blanks a channel.
+
+The reason this exists: **capturing every error and alerting a human are different jobs**, and conflating them makes your loudest channel (a GitHub issue tracker feeding a real backlog) as noisy as your cheapest one (a log line). A common split:
+
+```python
+fd = (
+    FlowDoctor.builder("my-service")
+    # Capture everything, unfiltered — this is your data-mining/observability
+    # record, not something a human triages one at a time.
+    .add_notifier(S3NotifierConfig(bucket="my-event-lake", subsystem="my-service"))
+    # Page immediately on operational noise that usually just needs a retry
+    # or an upstream fix, not a code change — no permanent record needed.
+    .add_notifier(TelegramNotifierConfig(
+        notify_on_category=["TRANSIENT", "EXTERNAL", "INFRA"],
+    ))
+    # Only file a GitHub issue — into your real backlog, which can be a
+    # different repo entirely — for genuinely fixable defects.
+    .add_notifier(GitHubNotifierConfig(
+        repo="myorg/central-backlog",
+        notify_on_category=["CODE", "CONFIG"],
+    ))
+    .build()
+)
+```
+
+Because `repo` is just a string, the GitHub notifier's issue destination is independent of the repo raising the error — file into a centralized backlog repo, a per-team tracker, or anywhere else that fits how your organization triages work. The one constraint: **`auto_fix_pr` requires the issue to land in the same repo as the code**, because the `flow-doctor-fix` GitHub Actions workflow only triggers on an `issues: labeled` event in the repo it lives in (see [Auto-Fix PRs](#auto-fix-prs)). Flow Doctor warns at init if it detects `auto_fix_pr=True` pointed at a different repo than the app's own (`with_repo(...)` / `FlowDoctorConfig.repo`).
+
+`notify_on_category` values are case-insensitive and match the [six diagnosis categories](#llm-diagnosis). Like `notify_on`, it's per-notifier and fully optional — omit it anywhere you want the pre-0.8.0 "every category reaches this notifier" behavior.
+
 ## Notifier configs (typed)
 
 Five first-class notifiers ship today, each with its own Pydantic config exposed via the discriminated union `NotifierConfig`:
@@ -412,6 +443,7 @@ with fd.capture_logs(level=logging.INFO):
 - **S3** — writes schema-1.0.0 entries to a system-wide changelog corpus
 - **Daily digest** — summarizes rate-limited / suppressed errors at end of day
 - **Custom notifiers** — subclass `flow_doctor.notify.base.Notifier`; the abstract base is a public extension point
+- **Category routing** — `notify_on_category` per notifier, gated on diagnosis category, so noisy/curated channels (GitHub issues) can opt in to only human-actionable categories while cheap channels (Telegram/SNS) still page on everything — see [Category routing](#category-routing--separating-capture-from-alert)
 
 ### Auto-Fix PRs
 
@@ -427,6 +459,8 @@ GitHubNotifierConfig(
 
 - **`auto_create_issue`** (default `True`) — file a GitHub issue on failure. Set `False` to silence issue creation without removing the notifier block.
 - **`auto_fix_pr`** (default `False`) — when `True`, Flow Doctor applies the `fix_label` (`flow-doctor:fix`) to each filed issue, which fires the fix workflow automatically with **no human label step**. Leave `False` for the human-in-the-loop default below.
+
+> **`auto_fix_pr` requires same-repo issues.** The `flow-doctor-fix` workflow triggers on `issues: labeled` in the repo it's installed in — GitHub gives no built-in way to fire it from an issue filed in a different repo. If you're routing issues to a [centralized backlog repo](#category-routing--separating-capture-from-alert), either leave `auto_fix_pr` off for that notifier (file for triage only) or build your own `repository_dispatch` relay. Flow Doctor logs a `WARNING` at init if `auto_fix_pr=True` is combined with a `repo` that differs from the app's own (set via `.with_repo(...)` or `FlowDoctorConfig.repo`).
 
 The fix-generation pipeline itself is the same either way:
 
