@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.8.2 (2026-07-06)
+
+### Fixed
+
+- **Dedup signature normalization for ISO-8601 event timestamps.** Log-captured
+  errors whose message embeds a per-tick ``Event timestamp 2026-07-06T…`` (e.g.
+  ``assert_within_session`` refusals) now collapse to one signature within the
+  cooldown window instead of firing a distinct alert every minute. Bare calendar
+  dates (session labels without a ``T`` time component) are preserved so
+  genuinely different sessions still dedup separately.
+
 ## 0.8.1 (2026-07-04)
 
 ### Added
