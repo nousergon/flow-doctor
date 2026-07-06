@@ -119,6 +119,33 @@ class TestEmit:
         reports = fd.history(limit=10)
         assert len(reports) == 1
 
+    def test_dedup_through_handler_varying_iso_timestamp(self):
+        """Log-captured errors with per-tick ISO timestamps collapse to one report."""
+        fd, _ = _make_fd()
+        handler = FlowDoctorHandler(fd, level=logging.ERROR)
+        logger = logging.getLogger("test.handler.dedup.iso")
+        logger.addHandler(handler)
+        logger.setLevel(logging.DEBUG)
+
+        msg_a = (
+            "nav_series point refused — Event timestamp 2026-07-06T20:00:16.706630+00:00 "
+            "belongs to session 2026-07-07, not the labeled session 2026-07-06"
+        )
+        msg_b = (
+            "nav_series point refused — Event timestamp 2026-07-06T20:01:17.137669+00:00 "
+            "belongs to session 2026-07-07, not the labeled session 2026-07-06"
+        )
+
+        try:
+            logger.error(msg_a)
+            logger.error(msg_b)
+        finally:
+            logger.removeHandler(handler)
+            _flush(handler)
+
+        reports = fd.history(limit=10)
+        assert len(reports) == 1
+
 
 class TestNonBlocking:
     def test_emit_returns_fast(self):

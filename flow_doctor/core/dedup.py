@@ -34,6 +34,13 @@ _NORMALIZE_PATTERNS: List[Tuple[re.Pattern, str]] = [
     ), "UUID"),
     # AWS-style request IDs
     (re.compile(r"\brequest[_\s]?id[=:\s]+[A-Za-z0-9\-]+", re.IGNORECASE), "request_id=N"),
+    # ISO-8601 datetimes (event timestamps in log-captured errors). Bare
+    # calendar dates (YYYY-MM-DD without ``T``) are preserved — session labels
+    # in assert_within_session messages are semantically meaningful.
+    (re.compile(
+        r"\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}"
+        r"(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?\b",
+    ), "DT"),
 ]
 
 
@@ -42,7 +49,7 @@ def normalize_message_for_signature(message: str) -> str:
 
     Preserves error codes and other semantically meaningful numbers. Only
     normalizes tokens that look like request IDs, contract identifiers,
-    UUIDs, or similar per-call variables.
+    UUIDs, ISO-8601 event timestamps, or similar per-call variables.
     """
     if not message:
         return ""

@@ -156,6 +156,47 @@ def test_normalize_uuids_and_request_ids():
     assert normalize_message_for_signature(req_a) == normalize_message_for_signature(req_b)
 
 
+_NAV_SERIES_REFUSAL_A = (
+    "nav_series point refused — Event timestamp 2026-07-06T20:00:16.706630+00:00 "
+    "belongs to session 2026-07-07, not the labeled session 2026-07-06 — "
+    "refusing to write a mis-keyed session artifact."
+)
+_NAV_SERIES_REFUSAL_B = (
+    "nav_series point refused — Event timestamp 2026-07-06T20:15:22.415495+00:00 "
+    "belongs to session 2026-07-07, not the labeled session 2026-07-06 — "
+    "refusing to write a mis-keyed session artifact."
+)
+_NAV_SERIES_REFUSAL_DIFFERENT_SESSION = (
+    "nav_series point refused — Event timestamp 2026-07-06T20:15:22.415495+00:00 "
+    "belongs to session 2026-07-08, not the labeled session 2026-07-06 — "
+    "refusing to write a mis-keyed session artifact."
+)
+
+
+def test_normalize_strips_iso_event_timestamps():
+    """Repeated log errors differing only by embedded event time collapse."""
+    n1 = normalize_message_for_signature(_NAV_SERIES_REFUSAL_A)
+    n2 = normalize_message_for_signature(_NAV_SERIES_REFUSAL_B)
+    assert n1 == n2
+    assert "DT" in n1
+    assert "2026-07-07" in n1
+    assert "2026-07-06" in n1
+
+
+def test_signature_from_message_dedups_nav_series_fixture():
+    """Per-minute nav_series refusals share one signature (executor 2026-07-06)."""
+    s1 = compute_signature_from_message(_NAV_SERIES_REFUSAL_A)
+    s2 = compute_signature_from_message(_NAV_SERIES_REFUSAL_B)
+    assert s1 == s2
+
+
+def test_signature_from_message_preserves_distinct_session_labels():
+    """Different session labels must not collapse into one signature."""
+    s_same = compute_signature_from_message(_NAV_SERIES_REFUSAL_A)
+    s_diff = compute_signature_from_message(_NAV_SERIES_REFUSAL_DIFFERENT_SESSION)
+    assert s_same != s_diff
+
+
 def test_dedup_increment():
     """Dedup hit should increment the counter."""
     with tempfile.NamedTemporaryFile(suffix=".db") as f:
