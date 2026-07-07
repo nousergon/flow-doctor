@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.8.3 (2026-07-06)
+
+### Added
+
+- **`FlowDoctor.last_dispatch_reason()` / `last_dispatch_outcome()` accessor:
+  `last_dispatched()`.** `report()` / `notify_event()` / `notify_success()`
+  return a non-``None`` report id on every outcome except `deduped` —
+  including `severity_filtered`, `category_filtered`, `rate_limited`, and
+  `delivery_failed`, where the event was evaluated but reached zero
+  notifiers. A caller that logged success on "got a report id back" was
+  therefore wrong for those cases (config#1813: a stale 2-notifier
+  executor config silently dropped `severity=info` trade alerts while
+  the caller logged "Telegram alert sent"). `last_dispatch_reason()`
+  returns the `DecisionReason` string for the most recent call on this
+  instance (`fired`, `deduped`, `severity_filtered`, `category_filtered`,
+  `rate_limited`, `delivery_failed`, `no_notifiers`); `last_dispatched()`
+  is the `== "fired"` convenience check. Purely additive — no change to
+  any existing method signature or return value.
+- **`DecisionReason` now exported from the package root** (`from
+  flow_doctor import DecisionReason`) so callers can compare against the
+  named values instead of hardcoding strings.
+
 ## 0.8.2 (2026-07-06)
 
 ### Fixed

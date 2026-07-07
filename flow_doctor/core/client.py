@@ -252,6 +252,15 @@ class FlowDoctor:
         self._decision_gate = None
         self._remediation_executor = None
         self._healthy = False
+        # Most recent DecisionReason recorded by report() / notify_event() /
+        # notify_success(). Lets a caller distinguish "dispatched to >=1
+        # notifier" (FIRED) from every other outcome (severity_filtered,
+        # category_filtered, rate_limited, delivery_failed, no_notifiers,
+        # deduped) WITHOUT reaching into the store — a non-None report id is
+        # returned on every one of those outcomes except `deduped`, so a
+        # caller that logs success on "report id is not None" is wrong for
+        # e.g. severity_filtered. See `last_dispatch_reason` / `last_dispatched`.
+        self._last_dispatch_reason: Optional[str] = None
 
         try:
             self._store = self._init_store(config)
@@ -761,6 +770,32 @@ class FlowDoctor:
             print(f"[flow-doctor] notify_event_async() error: {exc}", file=sys.stderr)
             return None
 
+    def last_dispatch_reason(self) -> Optional[str]:
+        """``DecisionReason`` value for the most recent report()/notify_event()/
+        notify_success() call made on this instance, or ``None`` if none has
+        run yet.
+
+        A non-``None`` report id from those calls means "seen and evaluated",
+        NOT "delivered" — e.g. ``severity_filtered``/``category_filtered``/
+        ``rate_limited``/``delivery_failed``/``no_notifiers`` all also return
+        a report id. Check this (or :meth:`last_dispatched`) before logging a
+        "sent" message. One value per call; not meaningful under concurrent
+        calls to the same ``FlowDoctor`` instance from multiple threads.
+        """
+        return self._last_dispatch_reason
+
+    def last_dispatched(self) -> bool:
+        """True iff the most recent report()/notify_event()/notify_success()
+        call actually reached >=1 notifier (``DecisionReason.FIRED``).
+
+        False for every other outcome, including a call that returned a
+        non-``None`` report id (severity_filtered, category_filtered,
+        rate_limited, delivery_failed, no_notifiers) and for a call that
+        hasn't run yet. This is the check a caller wants before logging
+        "alert sent" — a report id alone does not mean delivery happened.
+        """
+        return self._last_dispatch_reason == DecisionReason.FIRED.value
+
     def _do_notify_event(
         self,
         subject: str,
@@ -992,6 +1027,10 @@ class FlowDoctor:
         path, but it IS logged at WARNING so the observability layer itself
         fails loud rather than silently.
         """
+        # Recorded even if the store write below fails — callers reading
+        # last_dispatch_reason() care about the in-process outcome of THIS
+        # call, not whether persistence succeeded.
+        self._last_dispatch_reason = reason
         sig8 = (error_signature or "")[:8]
         try:
             self._store.save_decision(

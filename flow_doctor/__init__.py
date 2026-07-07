@@ -6,7 +6,7 @@ from flow_doctor.core.builder import FlowDoctorBuilder
 from flow_doctor.core.client import FlowDoctor
 from flow_doctor.core.errors import ConfigError, FlowDoctorError
 from flow_doctor.core.handler import FlowDoctorHandler
-from flow_doctor.core.models import Severity
+from flow_doctor.core.models import DecisionReason, Severity
 from flow_doctor.notify.configs import (
     EmailNotifierConfig,
     GitHubNotifierConfig,
@@ -18,6 +18,7 @@ from flow_doctor.notify.configs import (
 
 __all__ = [
     "ConfigError",
+    "DecisionReason",
     "EmailNotifierConfig",
     "FlowDoctor",
     "FlowDoctorBuilder",
@@ -33,4 +34,4 @@ __all__ = [
     "context",
     "current_context",
 ]
-__version__ = "0.8.2"
+__version__ = "0.8.3"
