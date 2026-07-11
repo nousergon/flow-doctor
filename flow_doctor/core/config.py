@@ -142,6 +142,14 @@ class DiagnosisConfig(_ConfigModel):
     confidence_calibration: float = 0.85
     timeout_seconds: int = 30
     max_daily_cost_usd: float = 1.00  # Hard cap on daily LLM spend
+    # SFT capture (small-model distillation corpus, config#1541). When LLM
+    # capture is enabled via the fleet env switch (LLM_SFT_CAPTURE_ENABLED /
+    # ALPHA_ENGINE_DECISION_CAPTURE_ENABLED), each diagnosis call is appended
+    # to this JSONL sink as a canonical krepis SFT v3 record tagged
+    # producer="flow_doctor_diagnosis". None → the DEFAULT_SFT_SINK_PATH under
+    # _sft_raw/. Capture is a no-op unless both the env switch is set AND the
+    # optional `krepis` dep is installed (pip install flow-doctor[sft]).
+    sft_sink_path: Optional[str] = None
 
 
 class GitHubConfig(_ConfigModel):
@@ -475,6 +483,7 @@ def load_config(
             confidence_calibration=float(diag_raw.get("confidence_calibration", 0.85)),
             timeout_seconds=int(diag_raw.get("timeout_seconds", 30)),
             max_daily_cost_usd=float(diag_raw.get("max_daily_cost_usd", 1.00)),
+            sft_sink_path=diag_raw.get("sft_sink_path"),
         )
     else:
         diagnosis_config = DiagnosisConfig()

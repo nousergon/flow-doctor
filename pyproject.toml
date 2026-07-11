@@ -61,12 +61,21 @@ diagnosis-openai = ["openai>=1.40"]
 remediation = ["boto3>=1.26"]
 s3 = ["boto3>=1.26"]
 agent = ["claude-agent-sdk>=0.1", "anthropic>=0.40"]
-all = ["requests>=2.28", "anthropic>=0.40", "boto3>=1.26"]
+# SFT capture for small-model distillation (config#1541). Emits each diagnosis
+# call as a canonical krepis SFT v3 record when the fleet capture switch is set.
+# krepis is MIT (no AGPL seam) — the same non-AGPL path morning-signal uses.
+sft = ["krepis>=0.11.2"]
+all = ["requests>=2.28", "anthropic>=0.40", "boto3>=1.26", "krepis>=0.11.2"]
 dev = [
     "pytest>=7.0",
     "requests>=2.28",
     "anthropic>=0.40",
 ]
+# SFT-capture tests run under `.[dev,sft]` (`krepis` present); they
+# `importorskip("krepis")` so the default `.[dev,diagnosis]` CI env — which
+# deliberately excludes krepis so the local Telegram-transport tests exercise
+# the fallback path — skips them cleanly rather than erroring.
+dev-sft = ["krepis>=0.11.2"]
 
 [project.urls]
 Homepage = "https://github.com/cipher813/flow-doctor"
