@@ -546,6 +546,7 @@ class FlowDoctor:
                         timeout_seconds=config.diagnosis.timeout_seconds,
                         price_in_per_1m=config.diagnosis.price_in_per_1m,
                         price_out_per_1m=config.diagnosis.price_out_per_1m,
+                        sft_sink_path=config.diagnosis.sft_sink_path,
                     )
                 except ImportError:
                     print(
@@ -561,6 +562,7 @@ class FlowDoctor:
                         model=config.diagnosis.model,
                         confidence_calibration=config.diagnosis.confidence_calibration,
                         timeout_seconds=config.diagnosis.timeout_seconds,
+                        sft_sink_path=config.diagnosis.sft_sink_path,
                     )
                 except ImportError:
                     print(

@@ -306,3 +306,74 @@ def test_openai_compat_fenced_json_parses(monkeypatch):
     d = provider.diagnose(_make_context(), ContextAssembler())
     assert d.category == "CONFIG"
     assert d.root_cause == "bad flag"
+
+
+# ── SFT capture (config#1541) ────────────────────────────────────────────────
+# The diagnosis task is the third SFT producer surface (Vires coach +
+# morning-signal are already wired). Capture is gated on the fleet env switch
+# and is pure telemetry — it must never alter or break a diagnosis.
+
+_CAPTURE_ENV = "LLM_SFT_CAPTURE_ENABLED"
+
+
+def _run_anthropic_diagnose(sink_path):
+    provider = AnthropicProvider(
+        api_key="test-key", confidence_calibration=1.0, sft_sink_path=str(sink_path)
+    )
+    mock_resp = _mock_response(
+        json.dumps({"category": "CODE", "root_cause": "boom", "confidence": 0.9})
+    )
+    with patch("anthropic.Anthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_client.messages.create.return_value = mock_resp
+        mock_cls.return_value = mock_client
+        return provider.diagnose(_make_context(), ContextAssembler())
+
+
+def test_sft_capture_writes_record_when_enabled(tmp_path, monkeypatch):
+    import pytest
+
+    pytest.importorskip("krepis")  # record-building needs the (optional) SFT dep
+    monkeypatch.setenv(_CAPTURE_ENV, "1")
+    sink = tmp_path / "_sft_raw" / "flow_doctor_diagnosis.sft.jsonl"
+
+    diagnosis = _run_anthropic_diagnose(sink)
+
+    # Diagnosis still returned unchanged.
+    assert diagnosis.category == "CODE"
+    # Exactly one canonical SFT record landed with the distinct producer tag.
+    assert sink.exists()
+    lines = sink.read_text().strip().splitlines()
+    assert len(lines) == 1
+    rec = json.loads(lines[0])
+    assert rec["producer"] == "flow_doctor_diagnosis"
+    assert rec["model"]  # provider model recorded
+    # The COMPLETE input (system + user) is normalized into input_messages.
+    roles = [m["role"] for m in rec["input_messages"]]
+    assert roles[0] == "system" and "user" in roles
+    assert rec["usage"]["input_tokens"] == 1000
+    assert rec["usage"]["output_tokens"] == 500
+    assert rec["provenance"]["source"] == "live"
+
+
+def test_sft_capture_noop_when_disabled(tmp_path, monkeypatch):
+    monkeypatch.delenv(_CAPTURE_ENV, raising=False)
+    monkeypatch.delenv("ALPHA_ENGINE_DECISION_CAPTURE_ENABLED", raising=False)
+    sink = tmp_path / "_sft_raw" / "flow_doctor_diagnosis.sft.jsonl"
+
+    diagnosis = _run_anthropic_diagnose(sink)
+
+    assert diagnosis.category == "CODE"
+    assert not sink.exists()  # capture is off → nothing written
+
+
+def test_sft_capture_failure_never_breaks_diagnosis(tmp_path, monkeypatch):
+    monkeypatch.setenv(_CAPTURE_ENV, "1")
+    # A directory where the sink filename already exists as a DIRECTORY forces a
+    # write failure inside capture; the diagnosis must still return cleanly.
+    bad = tmp_path / "sink.jsonl"
+    bad.mkdir()
+
+    diagnosis = _run_anthropic_diagnose(bad)
+
+    assert diagnosis.category == "CODE"
