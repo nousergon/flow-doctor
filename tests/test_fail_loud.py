@@ -360,6 +360,7 @@ def test_dynamodb_backend_failure_degrades_even_when_strict_true(monkeypatch):
     """An init_schema() failure from the backend itself (e.g. IAM AccessDenied)
     must NEVER crash the caller, even with the default strict=True — this is
     the exact production incident this test guards against."""
+    pytest.importorskip("boto3")
     from botocore.exceptions import ClientError
     from flow_doctor.storage.dynamodb import DynamoDBStorage
 
@@ -383,6 +384,7 @@ def test_dynamodb_backend_failure_degrades_even_when_strict_true(monkeypatch):
 
 def test_dynamodb_backend_failure_logs_loudly(monkeypatch, capsys):
     """The degraded-mode message must be visible on stderr, not silently swallowed."""
+    pytest.importorskip("boto3")
     from botocore.exceptions import ClientError
     from flow_doctor.storage.dynamodb import DynamoDBStorage
 
