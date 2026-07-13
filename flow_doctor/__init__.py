@@ -4,7 +4,7 @@ from flow_doctor._protocol import FlowDoctorProtocol
 from flow_doctor.core._context import context, current_context
 from flow_doctor.core.builder import FlowDoctorBuilder
 from flow_doctor.core.client import FlowDoctor
-from flow_doctor.core.errors import ConfigError, FlowDoctorError
+from flow_doctor.core.errors import ConfigError, FlowDoctorError, StorageBackendError
 from flow_doctor.core.handler import FlowDoctorHandler
 from flow_doctor.core.models import DecisionReason, Severity
 from flow_doctor.notify.configs import (
@@ -30,8 +30,9 @@ __all__ = [
     "S3NotifierConfig",
     "Severity",
     "SlackNotifierConfig",
+    "StorageBackendError",
     "TelegramNotifierConfig",
     "context",
     "current_context",
 ]
-__version__ = "0.8.4"
+__version__ = "0.8.5"
