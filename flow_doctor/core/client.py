@@ -22,7 +22,7 @@ from flow_doctor.core.dedup import (
     compute_signature_from_exception,
     compute_signature_from_message,
 )
-from flow_doctor.core.errors import ConfigError
+from flow_doctor.core.errors import ConfigError, StorageBackendError
 from flow_doctor.core.models import (
     Action,
     ActionStatus,
@@ -230,12 +230,17 @@ class FlowDoctor:
 
         Args:
             config: Loaded config object.
-            strict: If True (default), any initialization failure raises.
+            strict: If True (default), any misconfiguration failure raises.
                 If False, init errors are printed to stderr and the instance
                 operates in degraded mode (no notifiers, ``_healthy=False``).
                 The strict default is intentional: silent degradation means
                 users discover broken error monitoring only during an actual
-                incident, which defeats the purpose of the tool.
+                incident, which defeats the purpose of the tool. Exception:
+                a ``StorageBackendError`` (an infra/runtime failure in the
+                store's own init — IAM gap, throttling, network blip, not a
+                config mistake) is ALWAYS degraded, regardless of `strict` —
+                a telemetry backend must never crash the producer it
+                instruments over its own transient failure.
         """
         self.config = config
         self._scrubber = Scrubber()
@@ -283,6 +288,23 @@ class FlowDoctor:
 
             self._healthy = True
             self._log_startup()
+        except StorageBackendError as exc:
+            # Backend runtime/infra failures (IAM gaps, throttling, network
+            # blips) in the store's own init are never allowed to crash the
+            # calling producer, regardless of `strict` — see the class
+            # docstring and nousergon/alpha-engine-config#2465. `strict`
+            # governs misconfiguration (missing install/config/secret); it
+            # was never meant to let a monitoring dependency's own infra
+            # hiccup kill the host workload it was only trying to log for.
+            import sys
+            print(
+                f"[flow-doctor] WARNING: storage backend init failed, operating in "
+                f"degraded mode (unconditional — a telemetry backend must never crash "
+                f"its caller, regardless of strict=): {exc}",
+                file=sys.stderr,
+            )
+            import traceback as _tb
+            _tb.print_exc(file=sys.stderr)
         except Exception:
             if strict:
                 raise
@@ -300,7 +322,14 @@ class FlowDoctor:
         if config.store.type == "sqlite":
             from flow_doctor.storage.sqlite import SQLiteStorage
             store = SQLiteStorage(config.store.path)
-            store.init_schema()
+            try:
+                store.init_schema()
+            except Exception as exc:
+                # A sqlite init failure here is a filesystem/permissions
+                # problem, not a config mistake — see StorageBackendError.
+                raise StorageBackendError(
+                    f"sqlite store init_schema() failed at {config.store.path!r}: {exc}"
+                ) from exc
             return store
         if config.store.type == "dynamodb":
             if not config.store.table_name:
@@ -314,7 +343,18 @@ class FlowDoctor:
                 table_name=config.store.table_name,
                 region=config.store.region,
             )
-            store.init_schema()
+            try:
+                store.init_schema()
+            except Exception as exc:
+                # An IAM permission gap, throttling, or a network blip while
+                # actually calling DynamoDB is an infra/runtime failure, not a
+                # config mistake — see StorageBackendError. `table_name` being
+                # present is already validated above; anything failing past
+                # that point is the backend itself, not misconfiguration.
+                raise StorageBackendError(
+                    f"dynamodb store init_schema() failed for table "
+                    f"{config.store.table_name!r}: {exc}"
+                ) from exc
             return store
         raise ValueError(f"Unsupported store type: {config.store.type}")
 

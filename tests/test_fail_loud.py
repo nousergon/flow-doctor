@@ -15,6 +15,7 @@ import pytest
 
 from flow_doctor import ConfigError, FlowDoctor
 from flow_doctor.core.config import _resolve_env_vars, load_config
+from flow_doctor.core.errors import StorageBackendError
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -334,6 +335,84 @@ def test_strict_true_is_default(sqlite_store):
             store=sqlite_store,
             notify=[{"type": "github", "repo": "owner/repo"}],
         )
+
+
+# ──────────────────────────────────────────────────────────────────────
+# StorageBackendError (infra/runtime failure) always degrades, even under
+# strict=True — a telemetry backend must never crash the calling producer
+# over its OWN transient failure. Regression coverage for
+# nousergon/alpha-engine-config#2465: an IAM permission gap on a shared
+# DynamoDB flow-doctor table crashed a production data-collection workload
+# because `strict=True` re-raised the backend's AccessDeniedException.
+# ──────────────────────────────────────────────────────────────────────
+def test_dynamodb_missing_table_name_still_raises_configerror(monkeypatch):
+    """A missing table_name is misconfiguration — must still raise ConfigError
+    under strict=True, unaffected by the StorageBackendError carve-out."""
+    with pytest.raises(ConfigError, match="table_name"):
+        FlowDoctor.from_config(
+            flow_name="test",
+            store={"type": "dynamodb"},
+            notify=[{"type": "github", "repo": "owner/repo", "token": "ghp_xyz"}],
+        )
+
+
+def test_dynamodb_backend_failure_degrades_even_when_strict_true(monkeypatch):
+    """An init_schema() failure from the backend itself (e.g. IAM AccessDenied)
+    must NEVER crash the caller, even with the default strict=True — this is
+    the exact production incident this test guards against."""
+    pytest.importorskip("boto3")
+    from botocore.exceptions import ClientError
+    from flow_doctor.storage.dynamodb import DynamoDBStorage
+
+    def _boom(self):
+        raise ClientError(
+            {"Error": {"Code": "AccessDeniedException", "Message": "nope"}},
+            "DescribeTable",
+        )
+
+    monkeypatch.setattr(DynamoDBStorage, "init_schema", _boom)
+
+    fd = FlowDoctor.from_config(
+        flow_name="test",
+        store={"type": "dynamodb", "table_name": "flow-doctor-store"},
+        notify=[{"type": "github", "repo": "owner/repo", "token": "ghp_xyz"}],
+        strict=True,
+    )
+    assert fd._healthy is False
+    assert fd._store is None
+
+
+def test_dynamodb_backend_failure_logs_loudly(monkeypatch, capsys):
+    """The degraded-mode message must be visible on stderr, not silently swallowed."""
+    pytest.importorskip("boto3")
+    from botocore.exceptions import ClientError
+    from flow_doctor.storage.dynamodb import DynamoDBStorage
+
+    def _boom(self):
+        raise ClientError(
+            {"Error": {"Code": "AccessDeniedException", "Message": "nope"}},
+            "DescribeTable",
+        )
+
+    monkeypatch.setattr(DynamoDBStorage, "init_schema", _boom)
+
+    FlowDoctor.from_config(
+        flow_name="test",
+        store={"type": "dynamodb", "table_name": "flow-doctor-store"},
+        notify=[{"type": "github", "repo": "owner/repo", "token": "ghp_xyz"}],
+        strict=True,
+    )
+    captured = capsys.readouterr()
+    assert "storage backend init failed" in captured.err
+    assert "AccessDeniedException" in captured.err
+
+
+def test_dynamodb_backend_error_is_storage_backend_error_subclass():
+    """StorageBackendError must be a FlowDoctorError so existing broad
+    ``except FlowDoctorError`` callers still catch it if it ever surfaces."""
+    from flow_doctor.core.errors import FlowDoctorError
+
+    assert issubclass(StorageBackendError, FlowDoctorError)
 
 
 # ──────────────────────────────────────────────────────────────────────

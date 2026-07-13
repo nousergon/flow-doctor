@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.5 (2026-07-13)
+
+### Fixed
+
+- **A storage backend's own runtime failure could crash the calling producer, even under the documented `strict=True` intent.** `FlowDoctor.__init__` previously re-raised ANY exception from `_init_store()` under `strict` — correct for genuine misconfiguration (missing table_name, bad store type), but wrong for an infra/runtime failure in the backend itself (an IAM permission gap, DynamoDB throttling, a network blip). A production incident (nousergon/alpha-engine-config#2465, 2026-07-13): an IAM role missing DynamoDB access crashed a data-collection workload before it did any work, because `strict=True` re-raised the backend's `AccessDeniedException` out of `FlowDoctor.from_config()`. New `StorageBackendError` (a `FlowDoctorError` subclass) is now raised by `_init_store()` specifically for failures from calling the backend (`init_schema()`), distinct from `ConfigError` for actual misconfiguration. `FlowDoctor.__init__` always degrades on `StorageBackendError` — logging loudly to stderr — regardless of `strict`. `strict` continues to govern true misconfiguration exactly as before; it was never meant to let a monitoring dependency's own transient failure crash the process it instruments.
+
 ## 0.8.3 (2026-07-06)
 
 ### Added
