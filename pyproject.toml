@@ -70,6 +70,7 @@ dev = [
     "pytest>=7.0",
     "requests>=2.28",
     "anthropic>=0.40",
+    "coverage[toml]>=7.0",
 ]
 # SFT-capture tests run under `.[dev,sft]` (`krepis` present); they
 # `importorskip("krepis")` so the default `.[dev,diagnosis]` CI env — which
@@ -119,6 +120,11 @@ exclude_lines = [
     "if __name__ == .__main__.:",
 ]
 show_missing = true
+# Ratchet floor (alpha-engine-config#2533): measured current coverage was
+# 80% (`coverage run -m pytest tests/ --ignore=tests/test_notifications.py`
+# + `coverage report`, same exclusion CI uses). Prevents regression; raise
+# opportunistically as coverage grows.
+fail_under = 80
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

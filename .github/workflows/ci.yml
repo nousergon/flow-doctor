@@ -22,8 +22,10 @@ jobs:
           pip install --upgrade pip
           pip install -e ".[dev,diagnosis]"
 
-      - name: Run tests
-        run: pytest tests/ -v --ignore=tests/test_notifications.py
+      - name: Run tests with coverage
+        run: |
+          python -m coverage run -m pytest tests/ -v --ignore=tests/test_notifications.py
+          python -m coverage report
 
       - name: Security audit
         run: |
