@@ -90,6 +90,13 @@ class SlackNotifier(Notifier):
             lines.extend(tb_lines)
             lines.append("```")
 
+        if report.logs:
+            log_lines = report.logs.strip().splitlines()[-20:]
+            lines.append("")
+            lines.append("```")
+            lines.extend(log_lines)
+            lines.append("```")
+
         # Diagnosis enrichment
         if diagnosis:
             category_emoji = {

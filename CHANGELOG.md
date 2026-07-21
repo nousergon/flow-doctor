@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.6 (2026-07-21)
+
+### Fixed
+
+- **Telegram and Slack notifiers silently dropped `notify_event(body=...)`.** `body` is stored as `Report.logs`; the email and GitHub notifiers already rendered it, but `telegram.py`/`slack.py`'s `_format_message` only ever rendered the subject line (`error_message`). Any caller relying on `body` for detail lost that detail in the delivered message — the concrete case: alpha-engine's trade alerts arrived as a bare `REDUCE COIN` with no shares/price/trigger, even though `executor/notifier.py` already built a richer body. Both formatters now render `report.logs` (last 20 lines, code block) alongside the existing traceback rendering.
+
 ## 0.8.5 (2026-07-13)
 
 ### Fixed

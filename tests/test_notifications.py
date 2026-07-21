@@ -52,6 +52,21 @@ def test_slack_notifier_cascade_format():
     assert "research-lambda" in msg
 
 
+def test_slack_notifier_renders_logs_body():
+    """notify_event()'s ``body`` is stored as Report.logs — the formatter
+    must render it, or callers using notify_event(body=...) for detail
+    (e.g. trade alerts) silently lose that detail in the delivered message."""
+    report = Report(
+        flow_name="executor",
+        error_message="REDUCE COIN",
+        severity="info",
+        logs="Shares: 12 @ $151.23\nRealized P&L: +$340.11\nTrigger: atr_trail",
+    )
+    msg = SlackNotifier._format_message(report, "executor")
+    assert "Realized P&L: +$340.11" in msg
+    assert "Shares: 12 @ $151.23" in msg
+
+
 def test_slack_notifier_sends():
     """Test actual HTTP sending to a mock server."""
     _SlackHandler.received = []
