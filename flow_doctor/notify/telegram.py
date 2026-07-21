@@ -302,6 +302,13 @@ class TelegramNotifier(Notifier):
             lines.extend(tb_lines)
             lines.append("```")
 
+        if report.logs:
+            log_lines = report.logs.strip().splitlines()[-20:]
+            lines.append("")
+            lines.append("```")
+            lines.extend(log_lines)
+            lines.append("```")
+
         if diagnosis:
             category_emoji = {
                 "TRANSIENT": "🔄", "DATA": "📊", "CODE": "🐛",
