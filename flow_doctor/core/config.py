@@ -105,6 +105,13 @@ class NotifyChannelConfig(_ConfigModel):
     message_thread_id: Optional[int] = None
     parse_mode: Optional[str] = "Markdown"
     disable_notification: bool = False
+    # Web Push fields. webpush_subscription is required (from config or
+    # FLOW_DOCTOR_WEBPUSH_SUBSCRIPTION); the two VAPID fields are optional
+    # overrides of krepis.webpush.send_push's own secret-resolved default.
+    webpush_subscription: Optional[Dict[str, Any]] = None
+    webpush_url: Optional[str] = None
+    webpush_vapid_private_key: Optional[str] = None
+    webpush_vapid_subject: Optional[str] = None
 
 
 class StoreConfig(_ConfigModel):
@@ -360,6 +367,10 @@ def _parse_notify_dicts(items: List[Dict]) -> List[NotifyChannelConfig]:
             message_thread_id=item.get("message_thread_id"),
             parse_mode=item.get("parse_mode", "Markdown"),
             disable_notification=item.get("disable_notification", False),
+            webpush_subscription=item.get("webpush_subscription"),
+            webpush_url=item.get("webpush_url"),
+            webpush_vapid_private_key=item.get("webpush_vapid_private_key"),
+            webpush_vapid_subject=item.get("webpush_vapid_subject"),
         ))
     return configs
 

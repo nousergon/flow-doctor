@@ -92,6 +92,12 @@ class FlowDoctorSettings(BaseSettings):
             "FLOW_DOCTOR_TELEGRAM_CHAT_ID", "TELEGRAM_CHAT_ID"
         ),
     )
+    # JSON-encoded PushSubscription.toJSON() string - no legacy alias, this
+    # field is new with the webpush notifier.
+    webpush_subscription: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("FLOW_DOCTOR_WEBPUSH_SUBSCRIPTION"),
+    )
 
 
 __all__ = ["FlowDoctorSettings"]
