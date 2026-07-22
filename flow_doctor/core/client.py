@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import functools
+import json
 import logging
 import os
 import platform
@@ -61,6 +62,7 @@ _ENV_FALLBACKS: Dict[str, List[str]] = {
     "s3_bucket": ["FLOW_DOCTOR_S3_BUCKET", "CHANGELOG_BUCKET"],
     "telegram_bot_token": ["FLOW_DOCTOR_TELEGRAM_BOT_TOKEN", "TELEGRAM_BOT_TOKEN"],
     "telegram_chat_id": ["FLOW_DOCTOR_TELEGRAM_CHAT_ID", "TELEGRAM_CHAT_ID"],
+    "webpush_subscription": ["FLOW_DOCTOR_WEBPUSH_SUBSCRIPTION"],
 }
 
 
@@ -543,10 +545,46 @@ class FlowDoctor:
                     disable_notification=nc.disable_notification,
                 ))
 
+            elif nc.type == "webpush":
+                try:
+                    import krepis.webpush  # noqa: F401
+                except ImportError:
+                    raise ConfigError(
+                        f"{label}: webpush notifier requires flow-doctor[webpush] "
+                        "installed (pip install 'flow-doctor[webpush]') - unlike "
+                        "telegram, there is no non-krepis fallback."
+                    )
+                subscription = nc.webpush_subscription
+                if subscription is None:
+                    raw = _env_fallback("webpush_subscription")
+                    if raw is not None:
+                        try:
+                            subscription = json.loads(raw)
+                        except json.JSONDecodeError as e:
+                            raise ConfigError(
+                                f"{label}: FLOW_DOCTOR_WEBPUSH_SUBSCRIPTION is not "
+                                f"valid JSON: {e}"
+                            )
+                if not subscription:
+                    raise ConfigError(
+                        f"{label}: webpush notifier requires subscription (or "
+                        f"{', '.join(_ENV_FALLBACKS['webpush_subscription'])} as a "
+                        "JSON-encoded PushSubscription.toJSON() string). Obtain "
+                        "one from whatever site owns your subscribe flow (e.g. "
+                        "symposion's pushManager.subscribe(...))."
+                    )
+                from flow_doctor.notify.webpush import WebPushNotifier
+                notifiers.append(WebPushNotifier(
+                    subscription=subscription,
+                    url=nc.webpush_url,
+                    vapid_private_key=nc.webpush_vapid_private_key,
+                    vapid_subject=nc.webpush_vapid_subject,
+                ))
+
             else:
                 raise ConfigError(
                     f"{label}: unknown notifier type '{nc.type}'. "
-                    f"Supported types: slack, email, github, s3, telegram."
+                    f"Supported types: slack, email, github, s3, telegram, webpush."
                 )
 
             # Stamp the per-notifier severity + category routing onto

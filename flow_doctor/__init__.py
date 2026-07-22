@@ -14,6 +14,7 @@ from flow_doctor.notify.configs import (
     S3NotifierConfig,
     SlackNotifierConfig,
     TelegramNotifierConfig,
+    WebPushNotifierConfig,
 )
 
 __all__ = [
@@ -32,7 +33,8 @@ __all__ = [
     "SlackNotifierConfig",
     "StorageBackendError",
     "TelegramNotifierConfig",
+    "WebPushNotifierConfig",
     "context",
     "current_context",
 ]
-__version__ = "0.8.6"
+__version__ = "0.8.7"

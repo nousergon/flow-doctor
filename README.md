@@ -6,7 +6,7 @@
 [![PyPI](https://img.shields.io/badge/PyPI-v0.6.0rc3-blue.svg)](https://pypi.org/project/flow-doctor/)
 [![Typed](https://img.shields.io/badge/typed-PEP_561-blue.svg)]()
 
-Pipeline error handler for Python. Captures exceptions, deduplicates failure signatures, optionally diagnoses root causes with LLMs, routes alerts (Telegram / Slack / email / GitHub / S3 / custom), and can generate fix PRs.
+Pipeline error handler for Python. Captures exceptions, deduplicates failure signatures, optionally diagnoses root causes with LLMs, routes alerts (Telegram / Slack / email / GitHub / S3 / Web Push / custom), and can generate fix PRs.
 
 **Typed, IDE-discoverable configuration.** Pydantic v2 models + a fluent `FlowDoctor.builder()` mean you don't need a yaml file — and when you have one, the schema is enforced at load time.
 
@@ -157,7 +157,7 @@ Because `repo` is just a string, the GitHub notifier's issue destination is inde
 
 ## Notifier configs (typed)
 
-Five first-class notifiers ship today, each with its own Pydantic config exposed via the discriminated union `NotifierConfig`:
+Six first-class notifiers ship today, each with its own Pydantic config exposed via the discriminated union `NotifierConfig`:
 
 | Config | Channel | Setup |
 |---|---|---|
@@ -166,6 +166,7 @@ Five first-class notifiers ship today, each with its own Pydantic config exposed
 | `EmailNotifierConfig` | SMTP (Gmail / any) | sender + recipients + SMTP password (Gmail App Password works) |
 | `GitHubNotifierConfig` | GitHub issues | PAT with `Issues: write` on the target repo |
 | `S3NotifierConfig` | System-wide changelog corpus | Bucket + subsystem; IAM allows `s3:PutObject` on the prefix |
+| `WebPushNotifierConfig` | Web Push (VAPID) | `pip install 'flow-doctor[webpush]'` + a `PushSubscription` from whatever site owns your subscribe flow. Reaches an installed PWA/site even when its tab/app is closed. |
 
 Mix freely:
 

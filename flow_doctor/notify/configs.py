@@ -15,7 +15,7 @@ the legacy shape without touching the init code path.
 
 from __future__ import annotations
 
-from typing import Annotated, List, Literal, Optional, Union
+from typing import Annotated, Any, Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -185,6 +185,47 @@ class TelegramNotifierConfig(_NotifierConfigBase):
         )
 
 
+class WebPushNotifierConfig(_NotifierConfigBase):
+    """Web Push (VAPID) — reaches an installed PWA/site regardless of
+    whether its tab/app is currently open, unlike a browser-tab-local
+    ``Notification``.
+
+    Setup: get a ``PushSubscription`` from whatever site owns your
+    subscribe flow (e.g. symposion's ``pushManager.subscribe(...)``),
+    then either pass its ``.toJSON()`` here as ``subscription`` or set
+    ``FLOW_DOCTOR_WEBPUSH_SUBSCRIPTION`` to the JSON-encoded string. One
+    subscription is one device — add more than one ``WebPushNotifierConfig``
+    to fan the same flow out to more than one device.
+
+    Requires ``flow-doctor[webpush]`` installed (``pip install
+    'flow-doctor[webpush]'``) — unlike Telegram, there is no raw-HTTP fallback,
+    so a missing dependency raises ``ConfigError`` at init time rather than
+    silently no-op'ing per send.
+    """
+
+    type: Literal["webpush"] = "webpush"
+    subscription: Optional[Dict[str, Any]] = None
+    # Opened/focused by the client's notificationclick handler - typically
+    # a dashboard/incident link.
+    url: Optional[str] = None
+    # Both fall back to krepis.webpush.send_push's own secret resolution
+    # (the fleet's shared VAPID identity) when unset - only needed for a
+    # caller that wants an independent VAPID identity from that default.
+    vapid_private_key: Optional[str] = None
+    vapid_subject: Optional[str] = None
+
+    def to_channel_config(self) -> NotifyChannelConfig:
+        return NotifyChannelConfig(
+            type="webpush",
+            notify_on=self.notify_on,
+            notify_on_category=self.notify_on_category,
+            webpush_subscription=self.subscription,
+            webpush_url=self.url,
+            webpush_vapid_private_key=self.vapid_private_key,
+            webpush_vapid_subject=self.vapid_subject,
+        )
+
+
 # Discriminated union of all typed notifier configs. Consumers can
 # type-hint as ``NotifierConfig`` and Pydantic will pick the right
 # concrete model based on the ``type`` field.
@@ -195,6 +236,7 @@ NotifierConfig = Annotated[
         GitHubNotifierConfig,
         S3NotifierConfig,
         TelegramNotifierConfig,
+        WebPushNotifierConfig,
     ],
     Field(discriminator="type"),
 ]
@@ -207,4 +249,5 @@ __all__ = [
     "S3NotifierConfig",
     "SlackNotifierConfig",
     "TelegramNotifierConfig",
+    "WebPushNotifierConfig",
 ]
