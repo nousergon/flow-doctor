@@ -1,0 +1,9 @@
+# pip-audit ignore file — each entry is one vulnerability ID to suppress.
+# Every entry MUST carry a dated rationale comment on the line(s) directly
+# above it. Remove entries when the fix is published and the dependency
+# can be upgraded.
+
+# PYSEC-2026-2270 (python-dotenv 1.2.1, fix 1.2.2): python-dotenv is used
+# only in tests/test_settings.py. Fix version 1.2.2 is not yet published on
+# PyPI (confirmed 2026-07-24).
+PYSEC-2026-2270
