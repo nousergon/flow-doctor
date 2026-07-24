@@ -1,0 +1,14 @@
+# pip-audit ignore list (nousergon/alpha-engine-config#2342)
+# Every entry below MUST carry a dated rationale comment directly above it.
+# No blanket suppression — each accepted advisory is named individually.
+# Format:
+#   # <rationale> — accepted YYYY-MM-DD, revisit <YYYY-MM-DD or "when a fix is released">
+#   <VULN-ID>
+#
+# No entries as of 2026-07-24: full `pip install -e ".[dev,diagnosis]"` +
+# `pip-audit` against this repo's CI Python 3.12 reported zero known
+# vulnerabilities. python-dotenv's PYSEC-2026-2270 (fix in 1.2.2) requires
+# Python >=3.10, and CI targets 3.12, so pip resolves to the patched version
+# automatically. This file exists so the ignore-file plumbing in ci.yml has a
+# stable target; add dated entries here if/when pip-audit surfaces a finding
+# that can't be safely fixed by a version bump.
