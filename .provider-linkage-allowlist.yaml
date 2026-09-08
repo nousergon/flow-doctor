@@ -180,3 +180,25 @@ entries:
       `provider: anthropic` rejection path by name, not a live client.
     expires: 2027-02-28
     tracking: alpha-engine-config-I9295
+
+  # -- `dist` class, enforcement flip (alpha-engine-config-I10225) --
+
+  - path: pyproject.toml
+    pattern: "openai:dist"
+    reason: >-
+      Three declarations, all a deliberately generic OpenAI-COMPATIBLE wire
+      dependency, never a lock-in to OpenAI itself (per this file's own
+      comment: "carries no lock-in to a specific vendor SDK"; `anthropic` was
+      removed as an extra for the same reason). `diagnosis-openai =
+      ["openai>=1.40"]` and the `all`/`router` extras all back
+      flow_doctor/diagnosis/provider.py's `_call_openai_compat_chat` and
+      flow_doctor/fix/generator.py's `_complete_openai_compat` -- both
+      FAIL-CLOSED if no explicit `base_url` is configured (measured: neither
+      falls back to the openai SDK's default OpenAI endpoint), i.e. exactly
+      the declared-adapter shape principle 8 permits: the `openai` package
+      here is the OpenAI-wire-format client, addressed only through an
+      operator-supplied base_url, never a hardcoded OpenAI selection. `router`
+      additionally pulls the `openai` package transitively via krepis's own
+      `[openai]` extra for krepis.llm.LLMClient.
+    expires: "2026-12-07"
+    tracking: alpha-engine-config-I10225
