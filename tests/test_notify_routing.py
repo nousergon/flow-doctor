@@ -305,11 +305,25 @@ def _report():
     )
 
 
-def test_auto_fix_pr_applies_label_after_issue_creation():
+def _fix_diagnosis():
+    return Diagnosis(
+        report_id="r1", flow_name="f", category="CODE",
+        root_cause="Logic error", confidence=0.9,
+        remediation="fix it", affected_files=["main.py:5"],
+    )
+
+
+def test_auto_fix_pr_applies_label_when_the_body_carries_metadata():
+    """The label is a dispatch into the fix CLI, and the CLI parses the body.
+
+    alpha-engine-config-I10368: this test used to pass NO diagnosis and assert
+    the label went on anyway — it encoded the defect. `_format_body` emits the
+    `flow-doctor-metadata` block only when a diagnosis exists, so labelling a
+    body without one dispatched `Flow Doctor Fix` into a guaranteed failure.
+    """
     notifier = GitHubNotifier(repo="o/r", token="t", auto_fix_pr=True)
-    # alpha-engine-config-I10350: send() now searches the tracker for an
-    # existing fingerprint match before filing — the first call is that
-    # search, returning no items, before issue creation and labeling.
+    # alpha-engine-config-I10350: send() searches the tracker for an existing
+    # fingerprint match before filing — the first call is that search.
     search = _mock_resp(200, {"items": []})
     create = _mock_resp(201, {"html_url": "https://github.com/o/r/issues/42", "number": 42})
     label = _mock_resp(200, [{"name": "flow-doctor:fix"}])
@@ -317,7 +331,7 @@ def test_auto_fix_pr_applies_label_after_issue_creation():
     with patch(
         "flow_doctor.notify.github.urlopen", side_effect=[search, create, label]
     ) as mock_url:
-        result = notifier.send(_report(), "f")
+        result = notifier.send(_report(), "f", diagnosis=_fix_diagnosis())
 
     assert result == "https://github.com/o/r/issues/42"
     # Three calls: fingerprint search, create issue, then apply the fix label.
@@ -325,6 +339,63 @@ def test_auto_fix_pr_applies_label_after_issue_creation():
     label_req = mock_url.call_args_list[2][0][0]
     assert label_req.full_url.endswith("/issues/42/labels")
     assert json.loads(label_req.data)["labels"] == ["flow-doctor:fix"]
+    # The dispatch is only legitimate because the body it labelled is parseable.
+    assert "flow-doctor-metadata" in json.loads(
+        mock_url.call_args_list[1][0][0].data
+    )["body"]
+
+
+def test_auto_fix_pr_does_not_label_an_issue_with_no_metadata(caplog):
+    """No diagnosis means no metadata block means the fix CLI cannot run.
+
+    Measured consequence of labelling anyway: `Flow Doctor Fix` on
+    nousergon/nousergon-data recorded 61 failures, 39 skipped and ZERO
+    successes across its entire retained run history, every one exiting on
+    "No flow-doctor metadata found in issue body" — because diagnosis had been
+    failing closed since 2026-08-13. The issue is still filed; it is a tracked
+    record, not a fix candidate.
+    """
+    notifier = GitHubNotifier(repo="o/r", token="t", auto_fix_pr=True)
+    search = _mock_resp(200, {"items": []})
+    create = _mock_resp(201, {"html_url": "https://github.com/o/r/issues/43", "number": 43})
+
+    with caplog.at_level(logging.WARNING):
+        with patch(
+            "flow_doctor.notify.github.urlopen", side_effect=[search, create]
+        ) as mock_url:
+            result = notifier.send(_report(), "f")
+
+    assert result == "https://github.com/o/r/issues/43", (
+        "the issue must still be filed — suppressing the label must never "
+        "suppress the report"
+    )
+    assert mock_url.call_count == 2, "no label POST"
+    assert any(
+        "carries no flow-doctor-metadata block" in r.getMessage()
+        for r in caplog.records
+    ), "the suppression must be SAID, or it is a new silence replacing an old one"
+
+
+def test_the_suppression_warning_names_the_diagnosis_failure_reason(caplog):
+    """A reader must get from the suppressed label to the actual cause.
+
+    `report.diagnosis_error` is set by the client when the diagnosis call
+    fails (alpha-engine-config-I7789); repeating it here is what makes the
+    warning a lead rather than a dead end.
+    """
+    notifier = GitHubNotifier(repo="o/r", token="t", auto_fix_pr=True)
+    report = _report()
+    report.diagnosis_error = "LLMError: DLP scan blocked outbound request"
+    search = _mock_resp(200, {"items": []})
+    create = _mock_resp(201, {"html_url": "https://github.com/o/r/issues/44", "number": 44})
+
+    with caplog.at_level(logging.WARNING):
+        with patch("flow_doctor.notify.github.urlopen", side_effect=[search, create]):
+            notifier.send(report, "f")
+
+    assert any(
+        "DLP scan blocked outbound request" in r.getMessage() for r in caplog.records
+    )
 
 
 def test_no_auto_fix_pr_means_no_label_call():
@@ -352,7 +423,10 @@ def test_label_failure_does_not_flip_issue_success():
             raise Exception("label API down")
         return create
 
+    # A diagnosis is passed so the label is actually ATTEMPTED — without one
+    # the label call is now suppressed by design and this test would pass
+    # while exercising nothing (alpha-engine-config-I10368).
     with patch("flow_doctor.notify.github.urlopen", side_effect=_side_effect):
-        result = notifier.send(_report(), "f")
+        result = notifier.send(_report(), "f", diagnosis=_fix_diagnosis())
 
     assert result == "https://github.com/o/r/issues/9"

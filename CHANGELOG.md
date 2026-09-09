@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.16.4 (2026-09-09)
+
+### Fixed
+
+- **`auto_fix_pr` no longer labels an issue the fix CLI cannot parse** (alpha-engine-config-I10368). `GitHubNotifier.send()` applied `fix_label` on the `auto_fix_pr` toggle unconditionally after issue creation, while `_format_body()` emits the machine-readable `<!-- flow-doctor-metadata ... -->` block the fix CLI parses **only** under `if diagnosis:`. So every issue filed without a diagnosis dispatched the `issues: [labeled]` fix workflow into a guaranteed failure.
+
+  Measured on `nousergon/nousergon-data`'s `Flow Doctor Fix`: **61 failures, 39 skipped, zero successes across its entire retained run history**, every one exiting on `No flow-doctor metadata found in issue body`. The upstream cause was diagnosis failing closed on a missing DLP ruleset since 2026-08-13 (fixed in `krepis-PR211`), so every issue since was titled `[DIAGNOSIS UNAVAILABLE]` — and the detect -> diagnose -> act -> verify loop was open end to end with no surface reporting it.
+
+  The label is now applied only when the body actually carries the metadata block. An issue with no diagnosis is still filed — it is a tracked record, not a fix candidate — and the suppression is logged at WARNING naming `report.diagnosis_error`, so a reader gets from the missing label to the actual cause rather than to a new silence.
+
 ## 0.16.3 (2026-09-09)
 
 ### Fixed
