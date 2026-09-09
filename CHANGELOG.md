@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.16.3 (2026-09-09)
+
+### Fixed
+
+- **`GitHubNotifier` now deduplicates before filing** (alpha-engine-config-I10350). Two measured defects over the 28 open `flow-doctor` GitHub issues on one tracker: (1) one emission filed as two issues — an exception wrapper and the finding it wraps, 229us apart in report-creation time (`I8305`/`I8306`); (2) a recurring fingerprint (`NAV MARK CORRECTION applied`) re-filed as a brand-new issue on three consecutive sessions (`I9779`/`I9872`/`I9947`) because local dedup is a per-process cooldown window, not a lookup against the tracker itself.
+
+  1. `flow_doctor.core.dedup.compute_body_fingerprint()` derives a stable fingerprint from the `## Error` block text (digits collapsed to `#` over the first 160 chars), embedded on every filed issue via a `<!-- flow-doctor-fingerprint: ... -->` marker. `GitHubNotifier.send()` searches the tracker's OPEN issues for that fingerprint before filing; a match gets a recurrence comment and an `Occurrences` bump instead of a new issue. A search failure is logged and treated as "not found" — dedup lookup degrading must never suppress a real alert.
+  2. `flow_doctor.core.dedup.is_same_finding()` collapses a wrapper/payload pair filed by the same `GitHubNotifier` instance within a few seconds of each other (substring match on the message text) onto the first issue, with no comment and no occurrence bump — it's the same occurrence reaching `send()` twice, not a recurrence.
+  3. Every issue body now carries a visible `**Occurrences:** N (first <date>, latest <date>)` line, so a chronic condition reads as chronic instead of as N one-off issues.
+
 ## 0.16.2 (2026-08-28)
 
 ### Fixed

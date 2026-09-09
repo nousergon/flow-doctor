@@ -2,6 +2,7 @@
 
 import json
 from unittest.mock import MagicMock, patch
+from urllib.error import URLError
 
 from flow_doctor.core.models import Diagnosis, Report
 from flow_doctor.notify.github import GitHubNotifier
@@ -155,3 +156,149 @@ def test_send_failure():
 
     # send() returns None on failure (Optional[str] contract)
     assert result is None
+
+
+def _fake_response(status, body_obj=None):
+    resp = MagicMock()
+    resp.status = status
+    if body_obj is not None:
+        resp.read.return_value = json.dumps(body_obj).encode("utf-8")
+    resp.__enter__ = lambda s: s
+    resp.__exit__ = lambda s, *a: None
+    return resp
+
+
+def test_send_collapses_wrapper_onto_payload_same_process():
+    """alpha-engine-config-I10350 case (a): two findings from the same
+    report a fraction of a second apart, one text a superstring of the
+    other, collapse to ONE filing — the measured `I8305`/`I8306` pair
+    (payload + `RuntimeError:` wrapper, 229us apart)."""
+    notifier = GitHubNotifier(repo="owner/repo", token="test-token")
+
+    payload_report = _make_report(
+        error_type=None,
+        error_message=(
+            "[reconcile_audit] correction FAILED - EOD P&L integrity "
+            "gate failed"
+        ),
+    )
+    wrapper_report = _make_report(
+        error_type="RuntimeError",
+        error_message="EOD P&L integrity gate failed",
+    )
+
+    search_resp = _fake_response(200, {"items": []})
+    create_resp = _fake_response(
+        201, {"html_url": "https://github.com/owner/repo/issues/8305", "number": 8305}
+    )
+
+    def fake_urlopen(req, timeout=15):
+        if req.get_method() == "GET":
+            return search_resp
+        return create_resp
+
+    with patch("flow_doctor.notify.github.urlopen", side_effect=fake_urlopen) as mock_url:
+        first = notifier.send(payload_report, "executor")
+        second = notifier.send(wrapper_report, "executor")
+
+    assert first == "https://github.com/owner/repo/issues/8305"
+    assert second == first
+    # Only the payload's send() touches the network (search + create);
+    # the wrapper collapses in-memory before ever calling urlopen.
+    assert mock_url.call_count == 2
+
+
+def test_send_recurrence_comments_and_bumps_occurrences_no_new_issue():
+    """alpha-engine-config-I10350 case (b): a fingerprint already open on
+    the tracker produces a recurrence comment and increments Occurrences
+    — no new issue is filed (the `NAV MARK CORRECTION` shape: I9779,
+    I9872, I9947 for one recurring condition)."""
+    notifier = GitHubNotifier(repo="owner/repo", token="test-token")
+    report = _make_report(
+        error_type="RuntimeError", error_message="NAV MARK CORRECTION applied"
+    )
+
+    existing_body = (
+        "**Occurrences:** 1 (first 2026-09-01T00:00:00+00:00, "
+        "latest 2026-09-01T00:00:00+00:00)\n"
+        "\n<!-- flow-doctor-fingerprint: abc123 -->"
+    )
+    search_resp = _fake_response(
+        200,
+        {
+            "items": [
+                {
+                    "number": 9779,
+                    "html_url": "https://github.com/owner/repo/issues/9779",
+                    "body": existing_body,
+                }
+            ]
+        },
+    )
+    comment_resp = _fake_response(201)
+    patch_resp = _fake_response(200)
+
+    def fake_urlopen(req, timeout=15):
+        method = req.get_method()
+        if method == "GET":
+            return search_resp
+        if method == "POST":
+            return comment_resp
+        if method == "PATCH":
+            return patch_resp
+        raise AssertionError(f"unexpected method {method}")
+
+    with patch("flow_doctor.notify.github.urlopen", side_effect=fake_urlopen) as mock_url:
+        result = notifier.send(report, "predictor")
+
+    assert result == "https://github.com/owner/repo/issues/9779"
+    methods = [c[0][0].get_method() for c in mock_url.call_args_list]
+    assert methods == ["GET", "POST", "PATCH"]
+    # No POST to the issue-creation endpoint — only the comment POST.
+    create_calls = [
+        c for c in mock_url.call_args_list
+        if c[0][0].get_method() == "POST" and c[0][0].full_url.endswith("/issues")
+    ]
+    assert create_calls == []
+    # The PATCH body carries the bumped occurrence count.
+    patch_call = [c for c in mock_url.call_args_list if c[0][0].get_method() == "PATCH"][0]
+    patched_body = json.loads(patch_call[0][0].data)["body"]
+    assert "**Occurrences:** 2" in patched_body
+    assert "first 2026-09-01T00:00:00+00:00" in patched_body
+
+
+def test_send_files_normally_when_fingerprint_search_fails():
+    """A degraded/failing tracker search must never suppress a real alert
+    — losing an alert is worse than a possible duplicate
+    (alpha-engine-config-I10350)."""
+    notifier = GitHubNotifier(repo="owner/repo", token="test-token")
+    report = _make_report()
+
+    create_resp = _fake_response(
+        201, {"html_url": "https://github.com/owner/repo/issues/42", "number": 42}
+    )
+
+    def fake_urlopen(req, timeout=15):
+        if req.get_method() == "GET":
+            raise URLError("boom")
+        return create_resp
+
+    with patch("flow_doctor.notify.github.urlopen", side_effect=fake_urlopen):
+        result = notifier.send(report, "test-flow")
+
+    assert result == "https://github.com/owner/repo/issues/42"
+
+
+def test_format_body_embeds_fingerprint_marker_without_diagnosis():
+    """The fingerprint marker must be present even with no diagnosis —
+    the measured duplicate pairs had none, and the cross-session search
+    depends on every issue carrying it."""
+    report = _make_report()
+    body = GitHubNotifier._format_body(report, "test-flow", fingerprint="deadbeef01234567")
+    assert "flow-doctor-fingerprint: deadbeef01234567" in body
+
+
+def test_format_body_includes_visible_occurrences_line():
+    report = _make_report()
+    body = GitHubNotifier._format_body(report, "test-flow")
+    assert "**Occurrences:** 1 (first " in body

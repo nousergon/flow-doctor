@@ -307,33 +307,38 @@ def _report():
 
 def test_auto_fix_pr_applies_label_after_issue_creation():
     notifier = GitHubNotifier(repo="o/r", token="t", auto_fix_pr=True)
+    # alpha-engine-config-I10350: send() now searches the tracker for an
+    # existing fingerprint match before filing — the first call is that
+    # search, returning no items, before issue creation and labeling.
+    search = _mock_resp(200, {"items": []})
     create = _mock_resp(201, {"html_url": "https://github.com/o/r/issues/42", "number": 42})
     label = _mock_resp(200, [{"name": "flow-doctor:fix"}])
 
     with patch(
-        "flow_doctor.notify.github.urlopen", side_effect=[create, label]
+        "flow_doctor.notify.github.urlopen", side_effect=[search, create, label]
     ) as mock_url:
         result = notifier.send(_report(), "f")
 
     assert result == "https://github.com/o/r/issues/42"
-    # Two calls: create issue, then apply the fix label.
-    assert mock_url.call_count == 2
-    label_req = mock_url.call_args_list[1][0][0]
+    # Three calls: fingerprint search, create issue, then apply the fix label.
+    assert mock_url.call_count == 3
+    label_req = mock_url.call_args_list[2][0][0]
     assert label_req.full_url.endswith("/issues/42/labels")
     assert json.loads(label_req.data)["labels"] == ["flow-doctor:fix"]
 
 
 def test_no_auto_fix_pr_means_no_label_call():
     notifier = GitHubNotifier(repo="o/r", token="t")  # auto_fix_pr default False
+    search = _mock_resp(200, {"items": []})
     create = _mock_resp(201, {"html_url": "https://github.com/o/r/issues/7", "number": 7})
 
     with patch(
-        "flow_doctor.notify.github.urlopen", side_effect=[create]
+        "flow_doctor.notify.github.urlopen", side_effect=[search, create]
     ) as mock_url:
         result = notifier.send(_report(), "f")
 
     assert result == "https://github.com/o/r/issues/7"
-    assert mock_url.call_count == 1  # issue creation only, no label POST
+    assert mock_url.call_count == 2  # fingerprint search + issue creation, no label POST
 
 
 def test_label_failure_does_not_flip_issue_success():

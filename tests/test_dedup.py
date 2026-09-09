@@ -4,9 +4,11 @@ import tempfile
 
 from flow_doctor.core.dedup import (
     DedupChecker,
+    compute_body_fingerprint,
     compute_error_signature,
     compute_signature_from_exception,
     compute_signature_from_message,
+    is_same_finding,
     normalize_message_for_signature,
 )
 from flow_doctor.core.models import Report
@@ -216,3 +218,49 @@ def test_dedup_increment():
         # Check the count was incremented
         reports = store.get_reports(limit=1)
         assert reports[0].dedup_count == 2
+
+
+def test_body_fingerprint_normalizes_digits():
+    """alpha-engine-config-I10350: digits collapse so the same condition
+    recurring with different dollar amounts/dates hashes identically."""
+    fp1 = compute_body_fingerprint("RuntimeError", "NAV MARK CORRECTION applied: $1234.56")
+    fp2 = compute_body_fingerprint("RuntimeError", "NAV MARK CORRECTION applied: $9999.01")
+    assert fp1 == fp2
+
+
+def test_body_fingerprint_distinguishes_different_messages():
+    fp1 = compute_body_fingerprint("RuntimeError", "NAV MARK CORRECTION applied")
+    fp2 = compute_body_fingerprint("RuntimeError", "Stance-distribution drift detected")
+    assert fp1 != fp2
+
+
+def test_body_fingerprint_not_from_title():
+    """Fingerprint must be derived from the full message, not a truncated
+    title — the measured duplicate pairs had different titles for the
+    same finding."""
+    payload = "[reconcile_audit] correction FAILED - EOD P&L integrity gate failed"
+    wrapper = "EOD P&L integrity gate failed"
+    fp_payload = compute_body_fingerprint(None, payload)
+    fp_wrapper = compute_body_fingerprint("RuntimeError", wrapper)
+    # These legitimately differ (different '## Error' text) — the
+    # wrapper/payload pair is caught by `is_same_finding`, not by the
+    # fingerprint, which is why GitHubNotifier.send() checks both.
+    assert fp_payload != fp_wrapper
+
+
+def test_is_same_finding_wrapper_is_substring_of_payload():
+    """The measured `I8305`/`I8306` shape: the wrapper's message is a
+    substring of the richer payload message."""
+    payload = "[reconcile_audit] correction FAILED - EOD P&L integrity gate failed"
+    wrapper = "EOD P&L integrity gate failed"
+    assert is_same_finding(payload, wrapper)
+    assert is_same_finding(wrapper, payload)
+
+
+def test_is_same_finding_rejects_unrelated_messages():
+    assert not is_same_finding("NAV MARK CORRECTION applied", "Stance-distribution drift")
+
+
+def test_is_same_finding_rejects_empty():
+    assert not is_same_finding("", "")
+    assert not is_same_finding(None, "something")
