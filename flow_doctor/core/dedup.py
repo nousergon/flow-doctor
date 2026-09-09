@@ -129,6 +129,52 @@ def _extract_frames(traceback_str: str) -> List[str]:
     return frames
 
 
+_FINGERPRINT_DIGIT_RE = re.compile(r"\d")
+_FINGERPRINT_BODY_CHARS = 160
+
+
+def compute_body_fingerprint(error_type: Optional[str], error_message: str) -> str:
+    """Stable cross-session fingerprint from the rendered ``## Error`` block.
+
+    Mirrors the normalization that clustered the eight duplicate
+    ``flow-doctor`` GitHub issues retired 2026-09-09
+    (alpha-engine-config-I10350): digits collapsed to ``#`` over the first
+    ~160 characters of the error text, then hashed. This is what
+    ``GitHubNotifier`` embeds in every filed issue and searches the
+    tracker for before filing a new one.
+
+    Deliberately NOT derived from the issue *title*: the measured
+    duplicate pairs have different titles (the title truncates the
+    message differently for a bare string vs. an exception), while the
+    ``## Error`` block carries the same underlying text for both — see
+    ``is_same_finding`` for the wrapper/payload collapse this fingerprint
+    alone cannot catch (the two texts differ enough to hash differently).
+    """
+    text = f"{error_type}: {error_message}" if error_type else (error_message or "")
+    normalized = _FINGERPRINT_DIGIT_RE.sub("#", text[:_FINGERPRINT_BODY_CHARS])
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:16]
+
+
+def is_same_finding(a: Optional[str], b: Optional[str]) -> bool:
+    """True if two error messages describe the same underlying finding.
+
+    One message containing the other, after stripping surrounding
+    whitespace, is the measured shape of a wrapper/payload pair
+    (alpha-engine-config-I10350): an exception's ``str()`` re-states a
+    finding another call site already reported, decorated only with an
+    ``ErrorType: `` prefix that adds no information. Order-independent —
+    it doesn't matter which of the two call sites reports first.
+
+    Empty/None inputs never match (an empty message is not "the same" as
+    anything, including another empty message from an unrelated report).
+    """
+    a = (a or "").strip()
+    b = (b or "").strip()
+    if not a or not b:
+        return False
+    return a in b or b in a
+
+
 class DedupChecker:
     """Check whether a report is a duplicate within the cooldown window."""
 
