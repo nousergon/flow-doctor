@@ -33,6 +33,12 @@ _logger = logging.getLogger("flow_doctor")
 # plain error reports with no diagnosis attached.
 _FINGERPRINT_MARKER = "flow-doctor-fingerprint"
 
+# Marker opening the machine-readable block the fix CLI parses. Named as a
+# constant because TWO places must agree about it: `_format_body`, which emits
+# it only when a diagnosis exists, and `send()`, which refuses to apply the
+# fix label to a body without it (alpha-engine-config-I10368).
+_METADATA_MARKER = "flow-doctor-metadata"
+
 _OCCURRENCES_RE = re.compile(
     r"\*\*Occurrences:\*\*\s*(\d+)\s*\(first\s+([^,]+?),\s*latest\s+([^)]+?)\)"
 )
@@ -215,8 +221,38 @@ class GitHubNotifier(Notifier):
                     # flow-doctor-fix workflow generates a PR. Best-effort —
                     # a labeling failure must not flip the issue-creation
                     # success the operator already sees.
+                    #
+                    # GATED ON THE BODY ACTUALLY CARRYING METADATA
+                    # (alpha-engine-config-I10368). The fix CLI parses the
+                    # `flow-doctor-metadata` block, and `_format_body` emits
+                    # that block ONLY under `if diagnosis:`. Labelling
+                    # regardless dispatched the `issues: [labeled]` workflow
+                    # into a guaranteed failure: measured on
+                    # nousergon/nousergon-data's `Flow Doctor Fix` — 61
+                    # failures, 39 skipped, ZERO successes across its entire
+                    # retained history, every one of them exiting on "No
+                    # flow-doctor metadata found in issue body", because
+                    # diagnosis had been failing closed since 2026-08-13 and
+                    # every issue since was titled [DIAGNOSIS UNAVAILABLE].
+                    #
+                    # An issue with no diagnosis is a tracked record, not a
+                    # fix candidate. Saying so here is the only place that
+                    # can be known — the workflow sees a label, not a body.
                     if self.auto_fix_pr and issue_number is not None:
-                        self._add_labels(issue_number, [self.fix_label])
+                        if _METADATA_MARKER in body:
+                            self._add_labels(issue_number, [self.fix_label])
+                        else:
+                            _logger.warning(
+                                "flow-doctor: issue #%s in %s filed WITHOUT a "
+                                "diagnosis, so it carries no %s block for the "
+                                "fix CLI to parse; %r not applied. The issue "
+                                "stands as a tracked record. Diagnosis "
+                                "failure reason: %s",
+                                issue_number, self.repo, _METADATA_MARKER,
+                                self.fix_label,
+                                getattr(report, "diagnosis_error", None)
+                                or "not recorded",
+                            )
                     return issue_url or f"https://github.com/{self.repo}/issues"
                 self.last_error = (
                     f"GitHub issue creation returned HTTP {resp.status} for repo {self.repo}"
@@ -563,7 +599,7 @@ class GitHubNotifier(Notifier):
         # Embed machine-readable metadata for the fix CLI
         if diagnosis:
             metadata_block = (
-                "\n\n<!-- flow-doctor-metadata\n"
+                f"\n\n<!-- {_METADATA_MARKER}\n"
                 f"report_id: {report.id}\n"
                 f"diagnosis_id: {diagnosis.id}\n"
                 f"flow_name: {flow_name}\n"
