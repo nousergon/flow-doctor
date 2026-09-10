@@ -1,9 +1,10 @@
 # Flow Doctor
 
-[![Python](https://img.shields.io/badge/python-3.9+-blue.svg)]()
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-429_passing-brightgreen.svg)]()
-[![PyPI](https://img.shields.io/badge/PyPI-v0.6.0rc3-blue.svg)](https://pypi.org/project/flow-doctor/)
+[![CI](https://github.com/nousergon/flow-doctor/actions/workflows/ci.yml/badge.svg)](https://github.com/nousergon/flow-doctor/actions/workflows/ci.yml)
+[![Coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/nousergon/flow-doctor/badges/coverage.json)](https://github.com/nousergon/flow-doctor/actions/workflows/ci.yml)
+[![Python](https://img.shields.io/pypi/pyversions/flow-doctor)](https://pypi.org/project/flow-doctor/)
+[![License](https://img.shields.io/github/license/nousergon/flow-doctor)](LICENSE)
+[![PyPI](https://img.shields.io/pypi/v/flow-doctor)](https://pypi.org/project/flow-doctor/)
 [![Typed](https://img.shields.io/badge/typed-PEP_561-blue.svg)]()
 
 Pipeline error handler for Python. Captures exceptions, deduplicates failure signatures, optionally diagnoses root causes with LLMs, routes alerts (Telegram / Slack / email / GitHub / S3 / Web Push / custom), and can generate fix PRs.

@@ -137,11 +137,14 @@ exclude_lines = [
     "if __name__ == .__main__.:",
 ]
 show_missing = true
-# Ratchet floor (alpha-engine-config#2533): measured current coverage was
-# 80% (`coverage run -m pytest tests/ --ignore=tests/test_notifications.py`
-# + `coverage report`, same exclusion CI uses). Prevents regression; raise
-# opportunistically as coverage grows.
-fail_under = 80
+# Ratchet floor (alpha-engine-config#2533; raised repository-baseline-policy
+# §4.2 C3, alpha-engine-config PR fix/badge-provenance): measured current
+# coverage was 84.02% (`coverage run -m pytest tests/
+# --ignore=tests/test_notifications.py` + `coverage report`/`coverage json`,
+# same exclusion CI uses, 2026-09-10). Prevents regression; raise
+# opportunistically as coverage grows, never lowered to make a change pass.
+# `tests/test_coverage_scope.py` asserts this floor and the measurement scope.
+fail_under = 82
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
