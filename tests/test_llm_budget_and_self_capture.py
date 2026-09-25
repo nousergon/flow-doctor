@@ -99,7 +99,11 @@ def test_every_max_tokens_in_the_package_is_the_named_constant():
 
 def test_openai_compat_diagnosis_sends_the_budget(monkeypatch):
     provider = OpenAICompatProvider(
-        api_key="k", model="m", base_url="https://openrouter.ai/api/v1"
+        api_key="k",
+        model="m",
+        base_url="http://vllm.internal:8000/v1",
+        price_in_per_1m=1.0,
+        price_out_per_1m=2.0,
     )
     resp = _openai_response(json.dumps({"category": "DATA", "root_cause": "x"}))
     client = _install_fake_openai(monkeypatch, resp)
@@ -167,7 +171,11 @@ def _openai_response(content, *, finish_reason="stop", completion=500, reasoning
 
 def test_openai_compat_empty_content_raises_instead_of_a_junk_diagnosis(monkeypatch):
     provider = OpenAICompatProvider(
-        api_key="k", model="m", base_url="https://openrouter.ai/api/v1"
+        api_key="k",
+        model="m",
+        base_url="http://vllm.internal:8000/v1",
+        price_in_per_1m=1.0,
+        price_out_per_1m=2.0,
     )
     _install_fake_openai(
         monkeypatch,
@@ -227,7 +235,9 @@ def _fd_with_provider(tmp_path, provider):
             "enabled": True,
             "provider": "openai_compat",
             "api_key": "fake-key",
-            "base_url": "https://openrouter.ai/api/v1",
+            "base_url": "http://vllm.internal:8000/v1",
+            "price_in_per_1m": 1.0,
+            "price_out_per_1m": 2.0,
         },
     )
     assert fd._knowledge_base is not None and fd._rate_limiter is not None
