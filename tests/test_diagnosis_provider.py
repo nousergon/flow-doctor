@@ -147,6 +147,24 @@ def test_openai_compat_diagnose_configured_prices_when_no_reported_cost(monkeypa
     assert "extra_body" not in kwargs  # non-openrouter: no OpenRouter opt-in
 
 
+def test_openai_compat_prices_high_when_openrouter_omits_cost(monkeypatch, capsys):
+    # #85 deleted _FALLBACK_PRICES_PER_1M but left this branch reading it, so
+    # an OpenRouter response without usage.cost raised NameError.
+    from flow_doctor.diagnosis.provider import _FALLBACK_PRICES_PER_1M
+
+    provider = _openai_provider()
+    resp = _mock_openai_response(
+        json.dumps({"category": "DATA", "root_cause": "x", "confidence": 0.5}),
+        prompt=1_000_000, completion=1_000_000, cost=None,
+    )
+    _install_fake_openai(monkeypatch, resp)
+    d = provider.diagnose(_make_context(), ContextAssembler())
+
+    assert d.category == "DATA"
+    assert d.cost_usd == sum(_FALLBACK_PRICES_PER_1M)  # 1M in + 1M out
+    assert "carried no usage.cost" in capsys.readouterr().err
+
+
 def test_openai_compat_fenced_json_parses(monkeypatch):
     provider = _openai_provider()
     resp = _mock_openai_response(

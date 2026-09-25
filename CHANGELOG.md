@@ -7,6 +7,12 @@
 - **README badges were hand-set and stale — a `tests-429_passing` badge against a suite measuring 697 passing, and a `PyPI-v0.6.0rc3` badge against a published v0.16.4.** A badge whose value a human types renders identically to a measured one, so a reader cannot tell them apart, and it becomes false the moment reality moves without anyone editing a file (repository-baseline-policy.md §5.1). The tests-count badge is replaced with the CI workflow-status badge — a passing-test count has no honest generated source and states nothing a build badge does not. Coverage now renders a shields.io `endpoint` document that `.github/ci-scripts/publish_coverage_badge.sh` rewrites from the same `.coverage` file the `[tool.coverage.report] fail_under` gate reads, on every push to `main`. The `Python`, `License` and `PyPI` badges now come from PyPI/GitHub metadata rather than typed literals.
 - **The coverage floor was 80% against 84.02% measured**, so over three points of coverage could be lost without the gate noticing. Raised to 84 as a ratchet, and `tests/test_coverage_scope.py` now asserts the measurement *scope* — the way a coverage gate stops being honest is by narrowing what it measures rather than by lowering the number, which reads as an improvement in every report (§4.2 C5).
 
+## 0.16.6 (2026-09-25)
+
+### Fixed
+
+- **An OpenRouter diagnosis whose response carried no `usage.cost` raised `NameError` instead of being priced.** #85 deleted `_FALLBACK_PRICES_PER_1M` along with the direct Anthropic transport, but `OpenAICompatProvider.diagnose`'s no-cost branch still read it, so that path lost the diagnosis (caught by `_run_diagnosis` as a `diagnosis_error`) and recorded no spend against the daily cap. The constant is restored at the same Opus rates (5 / 25 per 1M) the branch's warning names, and `test_openai_compat_prices_high_when_openrouter_omits_cost` covers the branch.
+
 ## 0.16.5 (2026-09-25)
 
 ### Fixed

@@ -163,6 +163,12 @@ def _raise_if_empty(text: str, raw_response: object, *, model: str) -> None:
 # Valid categories for classification
 _VALID_CATEGORIES = {"TRANSIENT", "DATA", "CODE", "CONFIG", "EXTERNAL", "INFRA"}
 
+# Priced when an OpenRouter response carries no ``usage.cost``: Opus rates, so
+# the daily cost cap errs HIGH rather than free. Deleted with the direct
+# Anthropic transport in #85 while its one remaining reader here survived, so
+# that branch raised NameError and the diagnosis was lost.
+_FALLBACK_PRICES_PER_1M = (5.0, 25.0)
+
 
 def _parse_llm_json_response(text: str) -> dict:
     """Extract and parse JSON from LLM response text.
