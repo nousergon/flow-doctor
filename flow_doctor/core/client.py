@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, FrozenSet, List, Optional
 if TYPE_CHECKING:
     from flow_doctor.core.builder import FlowDoctorBuilder
 
+from flow_doctor.core._context import own_llm_call_scope
 from flow_doctor.core.config import FlowDoctorConfig, load_config
 from flow_doctor.core.dedup import (
     DedupChecker,
@@ -1480,7 +1481,11 @@ class FlowDoctor:
                 report=report,
                 git_context=git_context,
             )
-            diagnosis = self._diagnosis_provider.diagnose(context, self._context_assembler)
+            # Scoped so FlowDoctorHandler does not re-capture an ERROR the LLM
+            # client logs from inside this call as a new report (the
+            # 2026-09-24 data-collector loop; see own_llm_call_scope).
+            with own_llm_call_scope():
+                diagnosis = self._diagnosis_provider.diagnose(context, self._context_assembler)
             diagnosis.report_id = report.id
 
             # 3b. Post-hoc remediation guard for deploy-drift errors:

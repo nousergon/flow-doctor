@@ -20,7 +20,7 @@ import sys
 from abc import ABC, abstractmethod
 from typing import Optional
 
-from flow_doctor.core.constants import DEFAULT_DIAGNOSIS_MODEL
+from flow_doctor.core.constants import DEFAULT_DIAGNOSIS_MODEL, LLM_MAX_TOKENS
 from flow_doctor.core.models import Diagnosis
 from flow_doctor.core.router import RouterUnresolvable, resolve_router_edge
 from flow_doctor.diagnosis.context import ContextAssembler, DiagnosisContext
@@ -114,6 +114,49 @@ def _capture_sft_record(
         print(
             f"[flow-doctor] WARNING: SFT capture skipped ({exc})",
             file=sys.stderr,
+        )
+
+
+class EmptyDiagnosisResponse(RuntimeError):
+    """The diagnosis LLM call succeeded on the wire but returned no content.
+
+    On a reasoning model this is almost always ``finish_reason='length'``:
+    the chain of thought consumed the whole ``max_tokens`` budget
+    (``flow_doctor.core.constants.LLM_MAX_TOKENS``) and nothing was left to
+    answer with. Raised instead of parsing ``''`` into a fabricated
+    low-confidence diagnosis; ``FlowDoctor._run_diagnosis`` catches it,
+    stamps ``report.diagnosis_error`` and files the report WITHOUT a
+    diagnosis — the report is never lost, and never carries a diagnosis that
+    was not produced.
+    """
+
+
+def _empty_response_detail(raw_response: object) -> str:
+    """``finish_reason`` / token counts off an OpenAI-shaped response, for the
+    ``EmptyDiagnosisResponse`` message. Best-effort: any missing field reads
+    as ``?`` rather than failing the (already failed) diagnosis a second way.
+    """
+    try:
+        finish = raw_response.choices[0].finish_reason  # type: ignore[attr-defined]
+    except Exception:  # noqa: BLE001 - diagnostic detail only
+        finish = "?"
+    usage = getattr(raw_response, "usage", None)
+    completion = getattr(usage, "completion_tokens", "?")
+    details = getattr(usage, "completion_tokens_details", None)
+    reasoning = getattr(details, "reasoning_tokens", "?")
+    return (
+        f"finish_reason={finish!r} completion_tokens={completion} "
+        f"reasoning_tokens={reasoning} max_tokens={LLM_MAX_TOKENS}"
+    )
+
+
+def _raise_if_empty(text: str, raw_response: object, *, model: str) -> None:
+    if not text:
+        raise EmptyDiagnosisResponse(
+            f"diagnosis model {model!r} returned EMPTY content "
+            f"({_empty_response_detail(raw_response)}). On a reasoning model "
+            f"this means the reasoning trace consumed the whole budget; the "
+            f"report is filed without a diagnosis."
         )
 
 
@@ -235,7 +278,7 @@ def _call_openai_compat_chat(
 
     request_kwargs = dict(
         model=model,
-        max_tokens=2048,
+        max_tokens=LLM_MAX_TOKENS,
         messages=[
             {"role": "system", "content": assembler.system_prompt},
             {"role": "user", "content": assembler.build_prompt(context)},
@@ -245,6 +288,7 @@ def _call_openai_compat_chat(
     response = client.chat.completions.create(**request_kwargs)
 
     text = (response.choices[0].message.content or "").strip()
+    _raise_if_empty(text, response, model=model)
     parsed = _parse_llm_json_response(text)
 
     usage = getattr(response, "usage", None)
@@ -418,7 +462,7 @@ class RouterProvider(DiagnosisProvider):
         :class:`RouterUnresolvable` on any failure — never returns a partial
         or guessed result.
         """
-        return resolve_router_edge(self.model_group, max_tokens=2048, log_prefix="flow-doctor")
+        return resolve_router_edge(self.model_group, max_tokens=LLM_MAX_TOKENS, log_prefix="flow-doctor")
 
     def diagnose(self, context: DiagnosisContext, assembler: ContextAssembler) -> Diagnosis:
         """Resolve the router group, then call the resolved endpoint.
@@ -444,17 +488,21 @@ class RouterProvider(DiagnosisProvider):
         result = client.complete(
             system=assembler.system_prompt,
             user_content=assembler.build_prompt(context),
-            max_tokens=2048,
+            max_tokens=LLM_MAX_TOKENS,
             cache_system=True,
             on_unsupported="drop",
         )
 
-        text = result.text
-        parsed = _parse_llm_json_response(text)
+        text = (result.text or "").strip()
 
         from krepis.cost import record_llm_call
 
+        # Recorded BEFORE the empty-content check: an exhausted reasoning
+        # budget is fully billed, and spend that never reaches the cost
+        # record is spend every budget guard reading it under-counts.
         cost_record = record_llm_call(result, extra_fields={"callsite_id": "flow_doctor_diagnosis"})
+        _raise_if_empty(text, result.raw_response, model=result.model)
+        parsed = _parse_llm_json_response(text)
         cost = float(cost_record.get("cost_usd") or 0.0)
         input_tokens = int(getattr(result.usage, "input_tokens", 0) or 0)
         output_tokens = int(getattr(result.usage, "output_tokens", 0) or 0)
