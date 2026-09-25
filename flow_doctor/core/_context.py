@@ -27,6 +27,13 @@ _extra_var: contextvars.ContextVar[Optional[Dict[str, Any]]] = contextvars.Conte
     "flow_doctor.extra", default=None
 )
 
+# True while THIS thread / asyncio task is inside flow-doctor's own LLM call
+# (the diagnosis). Read by ``FlowDoctorHandler.emit`` — see
+# ``own_llm_call_scope`` for why. Private: not part of the public API.
+_own_llm_call_var: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "flow_doctor.own_llm_call", default=False
+)
+
 
 def current_flow_name() -> Optional[str]:
     return _flow_name_var.get()
@@ -91,6 +98,43 @@ def context(
         # Reset in reverse order so nested ``set`` calls unwind correctly.
         for token in reversed(tokens):
             token.var.reset(token)
+
+
+def in_own_llm_call() -> bool:
+    """Whether the current thread / task is inside :func:`own_llm_call_scope`."""
+    return _own_llm_call_var.get()
+
+
+@contextmanager
+def own_llm_call_scope() -> Iterator[None]:
+    """Mark the enclosed block as flow-doctor's OWN LLM call.
+
+    ``FlowDoctorHandler`` sits on the host's ROOT logger, so any ERROR the
+    LLM client logs while flow-doctor is diagnosing a report is otherwise
+    captured as a brand-new report — which is diagnosed, which can log the
+    same ERROR again. Observed 2026-09-24 on data-collector: krepis logged
+    ``llm: EMPTY message.content ... finish_reason='length'`` from inside the
+    diagnosis call and flow-doctor filed it as a new report — a feedback loop
+    of noise in which the diagnosis itself was lost.
+
+    The handler's existing self-exclusion is by logger NAME (``flow_doctor.*``)
+    and cannot see this: the record comes from ``krepis.llm``, a logger this
+    package does not own. Scoping by EXECUTION instead is structural — a
+    record emitted on the thread that is running the diagnosis, while it is
+    running, was caused by the diagnosis, whatever logger or wording it uses —
+    and it never touches a record the host emits on any other thread.
+
+    ``ContextVar`` is per-thread in sync code and per-task under asyncio, so
+    a concurrent host thread's ERROR is still captured. Records are only kept
+    out of flow-doctor's pipeline; they still reach every other handler (the
+    host's stdout / JSON logs). What the diagnosis failure means for the
+    report is carried on the report itself (``report.diagnosis_error``).
+    """
+    token = _own_llm_call_var.set(True)
+    try:
+        yield
+    finally:
+        _own_llm_call_var.reset(token)
 
 
 __all__ = [

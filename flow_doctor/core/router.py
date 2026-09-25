@@ -21,6 +21,8 @@ from __future__ import annotations
 import os
 import sys
 
+from flow_doctor.core.constants import LLM_MAX_TOKENS
+
 
 class RouterUnresolvable(RuntimeError):
     """The configured ``model_group`` could not be resolved to a callable
@@ -46,7 +48,9 @@ class RouterUnresolvable(RuntimeError):
 COMPELLED_ROUTES = frozenset({"litellm_proxy", "egress_proxy"})
 
 
-def resolve_router_edge(model_group: str, *, max_tokens: int = 2048, log_prefix: str = "flow-doctor"):
+def resolve_router_edge(
+    model_group: str, *, max_tokens: int = LLM_MAX_TOKENS, log_prefix: str = "flow-doctor"
+):
     """Resolve ``model_group`` to a callable ``edge_spec`` via krepis.
 
     Raises :class:`RouterUnresolvable` on any failure — krepis missing, the

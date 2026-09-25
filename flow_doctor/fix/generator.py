@@ -5,7 +5,7 @@ from __future__ import annotations
 import sys
 from typing import Dict, List, Optional
 
-from flow_doctor.core.constants import DEFAULT_DIAGNOSIS_MODEL
+from flow_doctor.core.constants import DEFAULT_DIAGNOSIS_MODEL, LLM_MAX_TOKENS
 from flow_doctor.core.router import resolve_router_edge
 from flow_doctor.fix.prompts import SYSTEM_PROMPT, build_fix_prompt
 
@@ -90,7 +90,7 @@ class FixGenerator:
         per-consumer SSM secret) instead of reimplementing it.
         """
         edge_spec = resolve_router_edge(
-            self.model_group, max_tokens=4096, log_prefix="flow-doctor-fix"
+            self.model_group, max_tokens=LLM_MAX_TOKENS, log_prefix="flow-doctor-fix"
         )
         from krepis.llm import LLMClient
 
@@ -103,7 +103,7 @@ class FixGenerator:
         result = client.complete(
             system=SYSTEM_PROMPT,
             user_content=user_prompt,
-            max_tokens=4096,
+            max_tokens=LLM_MAX_TOKENS,
             cache_system=True,
             on_unsupported="drop",
         )
@@ -138,7 +138,7 @@ class FixGenerator:
         )
         response = client.chat.completions.create(
             model=self.model,
-            max_tokens=4096,
+            max_tokens=LLM_MAX_TOKENS,
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": user_prompt},

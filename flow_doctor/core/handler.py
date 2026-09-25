@@ -8,6 +8,8 @@ import re
 import threading
 from typing import TYPE_CHECKING, List, Optional
 
+from flow_doctor.core._context import in_own_llm_call
+
 if TYPE_CHECKING:
     from flow_doctor.core.client import FlowDoctor
 
@@ -69,6 +71,14 @@ class FlowDoctorHandler(logging.Handler):
             # child logger like "flow_doctor.notify.s3" is still covered by
             # the startswith check.
             if record.name == "flow_doctor" or record.name.startswith("flow_doctor."):
+                return
+
+            # Records emitted BY flow-doctor's own diagnosis LLM call, whatever
+            # logger they come from (krepis.llm, openai, httpx). Without this a
+            # krepis ``EMPTY message.content`` ERROR raised inside the
+            # diagnosis became a NEW report, diagnosed in turn — a loop (see
+            # ``flow_doctor.core._context.own_llm_call_scope``).
+            if in_own_llm_call():
                 return
 
             msg = record.getMessage()
