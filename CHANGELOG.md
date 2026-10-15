@@ -7,6 +7,12 @@
 - **README badges were hand-set and stale — a `tests-429_passing` badge against a suite measuring 697 passing, and a `PyPI-v0.6.0rc3` badge against a published v0.16.4.** A badge whose value a human types renders identically to a measured one, so a reader cannot tell them apart, and it becomes false the moment reality moves without anyone editing a file (repository-baseline-policy.md §5.1). The tests-count badge is replaced with the CI workflow-status badge — a passing-test count has no honest generated source and states nothing a build badge does not. Coverage now renders a shields.io `endpoint` document that `.github/ci-scripts/publish_coverage_badge.sh` rewrites from the same `.coverage` file the `[tool.coverage.report] fail_under` gate reads, on every push to `main`. The `Python`, `License` and `PyPI` badges now come from PyPI/GitHub metadata rather than typed literals.
 - **The coverage floor was 80% against 84.02% measured**, so over three points of coverage could be lost without the gate noticing. Raised to 84 as a ratchet, and `tests/test_coverage_scope.py` now asserts the measurement *scope* — the way a coverage gate stops being honest is by narrowing what it measures rather than by lowering the number, which reads as an improvement in every report (§4.2 C5).
 
+## 0.16.7 (2026-10-15)
+
+### Fixed
+
+- **Both LLM call sites emitted a `callsite_id` that matched no registry row** (alpha-engine-config-I12312). The diagnosis and fix-generation calls tagged their `LLMClient` and their `record_llm_call` cost record with `flow_doctor_diagnosis` / `flow_doctor_fix_generation`, while the rows in alpha-engine-config's `LLM_CALLSITE_REGISTRY.yaml` are `flow-doctor-diagnosis` / `flow-doctor-fix-generation`, so their spend was attributed to unregistered callsites. Each module now emits one `CALLSITE_ID` constant spelled as its registry row, and the router tests assert the id on both the client and the cost record. `SFT_PRODUCER` (`flow_doctor_diagnosis`) is a corpus filter key, not a callsite id, and is unchanged.
+
 ## 0.16.6 (2026-09-25)
 
 ### Fixed

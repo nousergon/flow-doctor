@@ -37,6 +37,14 @@ SFT_PRODUCER = "flow_doctor_diagnosis"
 # `_sft_raw/` convention the corpus tooling expects (config#1541 acceptance).
 DEFAULT_SFT_SINK_PATH = "_sft_raw/flow_doctor_diagnosis.sft.jsonl"
 
+# The id this call site emits on every LLM call and cost record. It must match
+# the `id:` of its row in alpha-engine-config's LLM_CALLSITE_REGISTRY.yaml,
+# which is kebab-case; the snake_case spelling it used to carry matched no row,
+# so the spend was attributed to an unregistered callsite
+# (alpha-engine-config-I12312). Deliberately distinct from SFT_PRODUCER above,
+# which is a corpus filter key with its own consumers.
+CALLSITE_ID = "flow-doctor-diagnosis"
+
 
 class DiagnosisProvider(ABC):
     """Abstract interface for LLM diagnosis providers."""
@@ -487,7 +495,7 @@ class RouterProvider(DiagnosisProvider):
 
         client = LLMClient(
             edge_spec,
-            callsite_id="flow_doctor_diagnosis",
+            callsite_id=CALLSITE_ID,
             timeout=float(self.timeout_seconds),
             max_retries=0,
         )
@@ -506,7 +514,7 @@ class RouterProvider(DiagnosisProvider):
         # Recorded BEFORE the empty-content check: an exhausted reasoning
         # budget is fully billed, and spend that never reaches the cost
         # record is spend every budget guard reading it under-counts.
-        cost_record = record_llm_call(result, extra_fields={"callsite_id": "flow_doctor_diagnosis"})
+        cost_record = record_llm_call(result, extra_fields={"callsite_id": CALLSITE_ID})
         _raise_if_empty(text, result.raw_response, model=result.model)
         parsed = _parse_llm_json_response(text)
         cost = float(cost_record.get("cost_usd") or 0.0)

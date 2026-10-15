@@ -116,8 +116,11 @@ def test_fix_generator_router_happy_path(monkeypatch):
     # from the diagnosis path.
     client_args, client_kwargs = client_cls.call_args
     assert client_args[0].provider == "litellm_edge"
-    assert client_kwargs["callsite_id"] == "flow_doctor_fix_generation"
+    # Kebab-case, matching the LLM_CALLSITE_REGISTRY row id — on BOTH the
+    # client and the cost record (alpha-engine-config-I12312).
+    assert client_kwargs["callsite_id"] == "flow-doctor-fix-generation"
     record_cost.assert_called_once()
+    assert record_cost.call_args.kwargs["extra_fields"] == {"callsite_id": "flow-doctor-fix-generation"}
 
 
 def test_fix_generator_router_refuses_non_compelled_route(monkeypatch):
