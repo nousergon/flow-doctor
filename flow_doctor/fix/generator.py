@@ -9,6 +9,11 @@ from flow_doctor.core.constants import DEFAULT_DIAGNOSIS_MODEL, LLM_MAX_TOKENS
 from flow_doctor.core.router import resolve_router_edge
 from flow_doctor.fix.prompts import SYSTEM_PROMPT, build_fix_prompt
 
+# The id this call site emits on every LLM call and cost record. It must match
+# the `id:` of its row in alpha-engine-config's LLM_CALLSITE_REGISTRY.yaml,
+# which is kebab-case (alpha-engine-config-I12312).
+CALLSITE_ID = "flow-doctor-fix-generation"
+
 #: Accepted ``provider`` values. ``"anthropic"`` was REMOVED in 0.15.0 — the
 #: fleet's Anthropic account carries a $0 budget (alpha-engine-config-I7460)
 #: and every deployment is now a krepis consumer, so the direct-Anthropic
@@ -96,7 +101,7 @@ class FixGenerator:
 
         client = LLMClient(
             edge_spec,
-            callsite_id="flow_doctor_fix_generation",
+            callsite_id=CALLSITE_ID,
             timeout=float(self.timeout_seconds),
             max_retries=0,
         )
@@ -110,7 +115,7 @@ class FixGenerator:
 
         from krepis.cost import record_llm_call
 
-        record_llm_call(result, extra_fields={"callsite_id": "flow_doctor_fix_generation"})
+        record_llm_call(result, extra_fields={"callsite_id": CALLSITE_ID})
 
         return result.text
 
