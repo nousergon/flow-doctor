@@ -8,7 +8,7 @@ import re
 import sys
 import time
 from datetime import datetime, timezone
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 from urllib.error import URLError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
@@ -86,6 +86,21 @@ class GitHubNotifier(Notifier):
         # the same process/session, not the cross-session recurrence,
         # which is handled by the tracker search in send() instead.
         self._recent_sends: List[Tuple[float, str, int, str]] = []
+        # fingerprint -> (issue_number, issue_url) for every issue THIS
+        # instance filed. The tracker search in send() cannot see an issue
+        # filed seconds earlier: GitHub's search index lags issue creation,
+        # so a second report carrying the SAME fingerprint from the same
+        # process found nothing and filed a duplicate. Measured
+        # 2026-10-10 00:27Z: executor's ``eod_reconcile`` called
+        # ``fd.report(RuntimeError(msg), severity="critical")`` and then
+        # raised ``RuntimeError(msg)`` into ``guard()``, and the two reports
+        # became alpha-engine-config-I12222 and -I12223, 3 s apart, with the
+        # identical fingerprint ``e4d2d4dd47337af2``. An exact fingerprint
+        # match is a far stronger signal than ``is_same_finding``'s
+        # substring heuristic, so this lookup has no time window — it is
+        # bounded only by _MAX_RECENT_SENDS and by the issue still being
+        # open, which is read back over the REST API (no index lag).
+        self._filed_by_fingerprint: Dict[str, Tuple[int, str]] = {}
 
     def validate(self) -> None:
         """Preflight: confirm token is valid via ``GET /user``.
@@ -174,6 +189,10 @@ class GitHubNotifier(Notifier):
             # failed/degraded search is treated as "not found" and logged,
             # never swallowed silently.
             existing = self._search_open_issue_by_fingerprint(fingerprint)
+            if existing is None:
+                # 2b. The search index cannot yet see an issue this
+                # instance filed moments ago; ask the issue itself.
+                existing = self._get_open_issue_filed_here(fingerprint)
             if existing is not None:
                 issue_number, issue_url, existing_body = existing
                 self._post_recurrence_comment(issue_number, report, flow_name)
@@ -217,6 +236,7 @@ class GitHubNotifier(Notifier):
                             (now, report.error_message, issue_number, issue_url)
                         )
                         self._trim_recent_sends()
+                        self._remember_filed(fingerprint, issue_number, issue_url)
                     # Auto-fix-PR toggle: apply the fix label so the
                     # flow-doctor-fix workflow generates a PR. Best-effort —
                     # a labeling failure must not flip the issue-creation
@@ -283,6 +303,66 @@ class GitHubNotifier(Notifier):
         """Hard cap so a long-lived process never grows this list unbounded."""
         if len(self._recent_sends) > _MAX_RECENT_SENDS:
             self._recent_sends = self._recent_sends[-_MAX_RECENT_SENDS:]
+
+    def _remember_filed(self, fingerprint: str, issue_number: int, issue_url: str) -> None:
+        """Record an issue this instance filed, keyed by its fingerprint."""
+        self._filed_by_fingerprint.pop(fingerprint, None)
+        self._filed_by_fingerprint[fingerprint] = (issue_number, issue_url)
+        while len(self._filed_by_fingerprint) > _MAX_RECENT_SENDS:
+            # dicts preserve insertion order: drop the oldest filing.
+            del self._filed_by_fingerprint[next(iter(self._filed_by_fingerprint))]
+
+    def _get_open_issue_filed_here(
+        self, fingerprint: str
+    ) -> Optional[Tuple[int, str, str]]:
+        """Return (issue_number, issue_url, body) of an issue this instance
+        filed with ``fingerprint``, if it is still open; else None.
+
+        Read with ``GET /repos/{repo}/issues/{n}``, which reflects a new issue
+        immediately, unlike the search endpoint. A closed issue returns None,
+        matching the search's ``is:open`` contract: a recurrence after a
+        close is a new filing. A failed read is logged at WARNING and treated
+        as "not found", the same degrade rule as the search — losing an alert
+        is worse than a duplicate.
+        """
+        filed = self._filed_by_fingerprint.get(fingerprint)
+        if filed is None:
+            return None
+        issue_number, issue_url = filed
+        try:
+            url = f"https://api.github.com/repos/{self.repo}/issues/{issue_number}"
+            req = Request(
+                url,
+                headers={
+                    "Authorization": f"token {self.token}",
+                    "Accept": "application/vnd.github.v3+json",
+                },
+                method="GET",
+            )
+            with urlopen(req, timeout=15) as resp:
+                if resp.status != 200:
+                    _logger.warning(
+                        "flow-doctor: reading back issue #%s in %s returned HTTP %s "
+                        "(filing normally, not treated as a duplicate)",
+                        issue_number, self.repo, resp.status,
+                    )
+                    return None
+                data = json.loads(resp.read().decode("utf-8"))
+        except Exception as e:  # noqa: BLE001 - same degrade rule as the search
+            _logger.warning(
+                "flow-doctor: reading back issue #%s in %s failed "
+                "(filing normally, not treated as a duplicate): %s",
+                issue_number, self.repo, e,
+            )
+            return None
+        if data.get("state") != "open":
+            self._filed_by_fingerprint.pop(fingerprint, None)
+            return None
+        return (
+            issue_number,
+            data.get("html_url") or issue_url,
+            data.get("body") or "",
+        )
 
     def _find_collapse_target(
         self, error_message: str, now: float

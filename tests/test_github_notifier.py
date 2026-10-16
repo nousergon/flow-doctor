@@ -302,3 +302,142 @@ def test_format_body_includes_visible_occurrences_line():
     report = _make_report()
     body = GitHubNotifier._format_body(report, "test-flow")
     assert "**Occurrences:** 1 (first " in body
+
+
+# --- Same-fingerprint read-back (alpha-engine-config-I12222 / I12223) -------
+#
+# The measured pair: executor's eod_reconcile reported RuntimeError(msg) at
+# CRITICAL, then raised RuntimeError(msg) into guard(). Same fingerprint, 3 s
+# apart. The tracker search could not see the first issue yet (search index
+# lag) and two issues were filed. These tests pin the collapse window open
+# past _COLLAPSE_WINDOW_SECONDS so only the fingerprint read-back can catch it.
+
+_SNAPSHOT_MSG = (
+    "No snapshot at s3://alpha-engine-research/trades/snapshots/2026-10-09.json"
+)
+
+
+def _read_back_urlopen(issue_state, calls, read_back_error=None):
+    """Fake urlopen: search always empty (index lag), create returns #12222,
+    GET /issues/12222 returns ``issue_state``."""
+    created = {"n": 0}
+
+    def fake(req, timeout=15):
+        method, url = req.get_method(), req.full_url
+        calls.append((method, url))
+        if method == "GET" and "/search/issues" in url:
+            return _fake_response(200, {"items": []})
+        if method == "GET" and url.endswith("/issues/12222"):
+            if read_back_error is not None:
+                raise read_back_error
+            return _fake_response(
+                200,
+                {
+                    "number": 12222,
+                    "state": issue_state,
+                    "html_url": "https://github.com/owner/repo/issues/12222",
+                    "body": (
+                        "**Occurrences:** 1 (first 2026-10-10T00:27:41, "
+                        "latest 2026-10-10T00:27:41)"
+                    ),
+                },
+            )
+        if method == "POST" and url.endswith("/issues"):
+            created["n"] += 1
+            number = 12222 if created["n"] == 1 else 12223
+            return _fake_response(
+                201,
+                {"html_url": f"https://github.com/owner/repo/issues/{number}",
+                 "number": number},
+            )
+        if method == "POST" and url.endswith("/comments"):
+            return _fake_response(201)
+        if method == "PATCH":
+            return _fake_response(200)
+        raise AssertionError(f"unexpected {method} {url}")
+
+    return fake
+
+
+def _send_pair_outside_collapse_window(notifier, calls, fake):
+    critical = _make_report(
+        error_type="RuntimeError", error_message=_SNAPSHOT_MSG, severity="critical"
+    )
+    raised = _make_report(error_type="RuntimeError", error_message=_SNAPSHOT_MSG)
+    clock = iter([1000.0, 1010.0])  # 10 s apart: the time window cannot help
+    with patch("flow_doctor.notify.github.urlopen", side_effect=fake), \
+            patch("flow_doctor.notify.github.time.monotonic", side_effect=lambda: next(clock)):
+        first = notifier.send(critical, "executor")
+        second = notifier.send(raised, "executor")
+    creates = [c for c in calls if c[0] == "POST" and c[1].endswith("/issues")]
+    return first, second, creates
+
+
+def test_same_fingerprint_from_same_instance_is_a_recurrence_not_a_new_issue():
+    notifier = GitHubNotifier(repo="owner/repo", token="test-token")
+    calls = []
+    first, second, creates = _send_pair_outside_collapse_window(
+        notifier, calls, _read_back_urlopen("open", calls)
+    )
+
+    assert first == "https://github.com/owner/repo/issues/12222"
+    assert second == first
+    assert len(creates) == 1
+    # The second send read the issue back, commented, and bumped Occurrences.
+    assert ("GET", "https://api.github.com/repos/owner/repo/issues/12222") in calls
+    assert any(m == "POST" and u.endswith("/issues/12222/comments") for m, u in calls)
+    assert any(m == "PATCH" and u.endswith("/issues/12222") for m, u in calls)
+
+
+def test_same_fingerprint_files_new_issue_when_the_first_was_closed():
+    """A recurrence after the issue was closed is a new filing, matching the
+    search's ``is:open`` contract."""
+    notifier = GitHubNotifier(repo="owner/repo", token="test-token")
+    calls = []
+    first, second, creates = _send_pair_outside_collapse_window(
+        notifier, calls, _read_back_urlopen("closed", calls)
+    )
+
+    assert first == "https://github.com/owner/repo/issues/12222"
+    assert second == "https://github.com/owner/repo/issues/12223"
+    assert len(creates) == 2
+
+
+def test_same_fingerprint_files_normally_when_read_back_fails():
+    """A failed read-back must never suppress an alert."""
+    notifier = GitHubNotifier(repo="owner/repo", token="test-token")
+    calls = []
+    first, second, creates = _send_pair_outside_collapse_window(
+        notifier, calls,
+        _read_back_urlopen("open", calls, read_back_error=URLError("boom")),
+    )
+
+    assert second == "https://github.com/owner/repo/issues/12223"
+    assert len(creates) == 2
+
+
+def test_different_fingerprint_does_not_read_back():
+    notifier = GitHubNotifier(repo="owner/repo", token="test-token")
+    calls = []
+    fake = _read_back_urlopen("open", calls)
+    a = _make_report(error_type="RuntimeError", error_message=_SNAPSHOT_MSG)
+    b = _make_report(error_type="ValueError", error_message="unrelated finding")
+    clock = iter([1000.0, 1010.0])
+    with patch("flow_doctor.notify.github.urlopen", side_effect=fake), \
+            patch("flow_doctor.notify.github.time.monotonic", side_effect=lambda: next(clock)):
+        notifier.send(a, "executor")
+        notifier.send(b, "executor")
+
+    assert not any(m == "GET" and u.endswith("/issues/12222") for m, u in calls)
+    assert len([c for c in calls if c[0] == "POST" and c[1].endswith("/issues")]) == 2
+
+
+def test_filed_by_fingerprint_is_bounded():
+    from flow_doctor.notify import github as gh_mod
+
+    notifier = GitHubNotifier(repo="owner/repo", token="test-token")
+    for i in range(gh_mod._MAX_RECENT_SENDS + 5):
+        notifier._remember_filed(f"fp{i}", i, f"u{i}")
+    assert len(notifier._filed_by_fingerprint) == gh_mod._MAX_RECENT_SENDS
+    assert "fp0" not in notifier._filed_by_fingerprint
+    assert f"fp{gh_mod._MAX_RECENT_SENDS + 4}" in notifier._filed_by_fingerprint
