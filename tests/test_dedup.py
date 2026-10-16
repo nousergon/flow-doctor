@@ -1,6 +1,7 @@
 """Tests for deduplication."""
 
 import tempfile
+import traceback
 
 from flow_doctor.core.dedup import (
     DedupChecker,
@@ -10,6 +11,7 @@ from flow_doctor.core.dedup import (
     compute_signature_from_message,
     is_same_finding,
     normalize_message_for_signature,
+    normalize_untraced_exception_message,
 )
 from flow_doctor.core.models import Report
 from flow_doctor.storage.sqlite import SQLiteStorage
@@ -65,6 +67,94 @@ def test_compute_signature_from_exception():
         sig = compute_signature_from_exception(e)
         assert isinstance(sig, str)
         assert len(sig) == 16  # hex digest prefix
+
+
+# --- Un-raised exceptions (no traceback) ---------------------------------
+# ``fd.report(RuntimeError(msg))`` without a ``raise`` leaves
+# ``__traceback__`` None. Before the fix the signature was the hash of the
+# type name alone, so two unrelated un-raised RuntimeErrors deduped together
+# inside the 60-minute cooldown and the second alert was silently dropped.
+
+
+def test_untraced_exceptions_with_different_messages_do_not_collide():
+    a = RuntimeError("eod_reconcile: positions snapshot missing")
+    b = RuntimeError("IB gateway disconnected")
+    assert a.__traceback__ is None and b.__traceback__ is None
+    assert compute_signature_from_exception(a) != compute_signature_from_exception(b)
+
+
+def test_untraced_signature_is_not_the_bare_type_hash():
+    exc = RuntimeError("eod_reconcile: positions snapshot missing")
+    assert compute_signature_from_exception(exc) != compute_error_signature(
+        "RuntimeError", None
+    )
+
+
+def test_untraced_true_repeats_still_collapse():
+    """Repeats differing only in digits, ids, hex or timestamps share a signature."""
+    a = RuntimeError(
+        "snapshot failed at 2026-10-10T00:27:01Z for U1234567: 3 positions, "
+        "obj <Conn at 0x7f3a2b1c9d40> sha 1cc0ba5ed47c "
+        "trace 550e8400-e29b-41d4-a716-446655440000 orderId=812"
+    )
+    b = RuntimeError(
+        "snapshot failed at 2026-10-11T13:05:59.123+00:00 for U7654321: 12 positions, "
+        "obj <Conn at 0x55d0e1f2a3b4> sha 9fe2d00b31aa "
+        "trace 123e4567-e89b-12d3-a456-426614174000 orderId=9"
+    )
+    assert compute_signature_from_exception(a) == compute_signature_from_exception(b)
+
+
+def test_untraced_signature_keeps_the_type():
+    msg = "snapshot missing"
+    assert compute_signature_from_exception(
+        RuntimeError(msg)
+    ) != compute_signature_from_exception(ValueError(msg))
+
+
+def test_untraced_empty_message_falls_back_to_type():
+    assert compute_signature_from_exception(RuntimeError()) == compute_error_signature(
+        "RuntimeError", None
+    )
+
+
+def test_untraced_broken_str_falls_back_to_type():
+    class Broken(Exception):
+        def __str__(self):
+            raise RuntimeError("no str for you")
+
+    exc = Broken()
+    assert compute_signature_from_exception(exc) == compute_error_signature(
+        type(exc).__qualname__, None
+    )
+
+
+def test_normalize_untraced_message():
+    assert normalize_untraced_exception_message("") == ""
+    assert (
+        normalize_untraced_exception_message(
+            "  failed at 2026-10-10T00:27:01Z  acct U12  addr 0xDEAD01 sha abc12345def  "
+        )
+        == "failed at DT acct U# addr HEX sha HEX"
+    )
+    # Hex-only words carry no digit and stay words.
+    assert normalize_untraced_exception_message("deadbeef facade") == "deadbeef facade"
+
+
+def test_traced_signature_unchanged_by_message():
+    """Raised exceptions keep the type + top-frames signature; message is not mixed in."""
+    sigs = []
+    for msg in ("first message", "a completely different message"):
+        try:
+            raise RuntimeError(msg)
+        except RuntimeError as e:
+            sigs.append(compute_signature_from_exception(e))
+            expected = compute_error_signature(
+                "RuntimeError", "".join(traceback.format_tb(e.__traceback__))
+            )
+            assert sigs[-1] == expected
+    # Same raise site -> same frames -> same signature, by design.
+    assert sigs[0] == sigs[1]
 
 
 def test_dedup_checker_no_duplicate():
