@@ -91,15 +91,71 @@ def compute_error_signature(
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
 
+# Extra normalization for the message of an exception that carries no
+# traceback (see ``compute_signature_from_exception``). Applied AFTER
+# ``normalize_message_for_signature`` so UUIDs and ISO-8601 timestamps are
+# already collapsed to placeholders before the digit pass would shred them.
+_UNTRACED_NORMALIZE_PATTERNS: List[Tuple[re.Pattern, str]] = [
+    # 0x-prefixed hex: object addresses (``<Foo object at 0x7f3a...>``),
+    # handles, error words.
+    (re.compile(r"\b0x[0-9a-f]+\b", re.IGNORECASE), "HEX"),
+    # Bare hex ids of 8+ chars containing both a digit and a letter: commit
+    # SHAs, hash prefixes, trace ids. Requiring a digit leaves hex-only
+    # words (``deadbeef``, ``facade``) as words; requiring a letter leaves
+    # pure numbers to the digit pass below.
+    (re.compile(
+        r"\b(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{8,}\b",
+        re.IGNORECASE,
+    ), "HEX"),
+    # Every remaining digit run: counts, ids, ports, bare dates and clock
+    # times. Mirrors ``compute_body_fingerprint``'s digit collapse.
+    (re.compile(r"\d+"), "#"),
+    (re.compile(r"\s+"), " "),
+]
+
+
+def normalize_untraced_exception_message(message: str) -> str:
+    """Normalize an un-raised exception's message for its dedup signature.
+
+    Stricter than ``normalize_message_for_signature``: on top of UUIDs,
+    request ids and ISO-8601 timestamps it collapses hex ids and EVERY digit
+    run, so a true repeat whose only difference is a count, id, address or
+    timestamp still lands on one signature, while two different messages
+    do not.
+    """
+    if not message:
+        return ""
+    normalized = normalize_message_for_signature(message)
+    for pattern, replacement in _UNTRACED_NORMALIZE_PATTERNS:
+        normalized = pattern.sub(replacement, normalized)
+    return normalized.strip()
+
+
 def compute_signature_from_exception(exc: BaseException) -> str:
-    """Compute error signature from a live exception object."""
+    """Compute error signature from a live exception object.
+
+    A raised exception is identified by its type plus its top stack frames
+    (``compute_error_signature``). An exception that was constructed and
+    reported without ever being raised — ``fd.report(RuntimeError(msg))`` —
+    has no traceback, so type alone would make EVERY un-raised exception of
+    one type share a signature, and the cooldown window would silently drop
+    the second, unrelated alert. For those, the normalized message
+    (``normalize_untraced_exception_message``) stands in for the frames.
+    """
     error_type = type(exc).__qualname__
     tb = exc.__traceback__
     if tb is not None:
-        formatted = "".join(tb_module.format_tb(tb))
-    else:
-        formatted = ""
-    return compute_error_signature(error_type, formatted)
+        return compute_error_signature(error_type, "".join(tb_module.format_tb(tb)))
+
+    try:
+        message = str(exc)
+    except Exception:  # noqa: BLE001 - a broken __str__ must not lose the report
+        message = ""
+    normalized = normalize_untraced_exception_message(message)
+    if not normalized:
+        return compute_error_signature(error_type, None)
+    raw = f"{error_type}|msg:{normalized}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
 
 def _extract_frames(traceback_str: str) -> List[str]:

@@ -86,6 +86,22 @@ class TestReport:
         assert id1 is not None
         assert id2 is None  # suppressed by dedup
 
+    def test_unraised_exceptions_with_different_messages_both_report(self):
+        """Two un-raised RuntimeErrors with different messages are two alerts."""
+        fd, _ = _make_fd()
+        id1 = fd.report(RuntimeError("eod_reconcile: positions snapshot missing"))
+        id2 = fd.report(RuntimeError("IB gateway disconnected"))
+        assert id1 is not None
+        assert id2 is not None
+
+    def test_unraised_exception_true_repeat_is_suppressed(self):
+        """A repeat differing only in a count still dedupes inside the cooldown."""
+        fd, _ = _make_fd()
+        id1 = fd.report(RuntimeError("snapshot failed: 3 positions unmatched"))
+        id2 = fd.report(RuntimeError("snapshot failed: 4 positions unmatched"))
+        assert id1 is not None
+        assert id2 is None
+
     def test_report_scrubs_secrets(self):
         """Secrets in traceback and context should be scrubbed."""
         fd, _ = _make_fd()
