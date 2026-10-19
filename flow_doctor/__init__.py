@@ -37,4 +37,4 @@ __all__ = [
     "context",
     "current_context",
 ]
-__version__ = "0.16.9"
+__version__ = "0.17.0"

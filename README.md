@@ -295,6 +295,7 @@ diagnosis:
   price_out_per_1m: 1.50   # cost, so the daily cap stays honest
   timeout_seconds: 30
   max_daily_cost_usd: 1.00
+  unavailable_alert_after: 3   # N consecutive unavailable diagnoses -> CRITICAL (0 = off)
 
 # flow-doctor ships NO default vendor and NO default endpoint. It runs inside
 # your error path, on data you did not choose to send (tracebacks, log tails,

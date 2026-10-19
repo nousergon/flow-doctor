@@ -65,6 +65,25 @@ class StorageBackend(ABC):
         suppressed fleet alerting on 2026-08-11 (alpha-engine-config-I6921).
         """
 
+    def recent_diagnosis_outcomes(
+        self, flow_name: str, limit: int
+    ) -> Optional[List[str]]:
+        """Statuses of *flow_name*'s most recent LLM diagnosis attempts.
+
+        Newest first, at most *limit* entries, one per ``diagnosis`` Action
+        whose status is ``sent`` (a usable diagnosis came back) or ``failed``
+        (it was attempted and came back unavailable — the FAILED Action
+        ``_run_diagnosis`` records, alpha-engine-config-I7789). ``degraded``
+        Actions are skipped: a budget decision attempted nothing, so it
+        neither extends nor breaks a run of unavailable diagnoses.
+
+        Feeds the consecutive-unavailable-diagnosis detector
+        (alpha-engine-config-I7930). Not abstract, so a third-party backend
+        keeps working: the default ``None`` means "this backend cannot
+        answer", and the detector says so at WARNING instead of guessing.
+        """
+        return None
+
     @abstractmethod
     def has_recent_failure(self, flow_name: str, since: datetime) -> bool:
         """Check if a flow reported a failure since the given time."""

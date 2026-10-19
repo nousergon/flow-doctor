@@ -320,6 +320,46 @@ class DynamoDBStorage(StorageBackend):
         resp = self._table.query(**kwargs)
         return int(resp.get("Count", 0))
 
+    # FlowIndex holds every entity of a flow (reports, decisions, actions), so
+    # the newest page can be all reports. Bounded so a flow with no diagnosis
+    # history cannot turn one report() into an unbounded index walk.
+    _DIAGNOSIS_OUTCOME_MAX_PAGES = 10
+
+    def recent_diagnosis_outcomes(
+        self, flow_name: str, limit: int
+    ) -> Optional[List[str]]:
+        """See ``StorageBackend.recent_diagnosis_outcomes``.
+
+        Walks ``FlowIndex`` newest-first. ``action_type`` is a top-level
+        attribute on action items, so the filter is server-side; ``status``
+        lives only in ``payload`` and is read here.
+        """
+        outcomes: List[str] = []
+        kwargs: Dict[str, Any] = {
+            "IndexName": "FlowIndex",
+            "KeyConditionExpression": "flow_name = :flow",
+            "FilterExpression": "entity = :entity AND action_type = :atype",
+            "ExpressionAttributeValues": {
+                ":flow": flow_name,
+                ":entity": "action",
+                ":atype": "diagnosis",
+            },
+            "ScanIndexForward": False,
+        }
+        for _ in range(self._DIAGNOSIS_OUTCOME_MAX_PAGES):
+            resp = self._table.query(**kwargs)
+            for item in resp.get("Items") or []:
+                status = json.loads(item["payload"]).get("status")
+                if status in ("sent", "failed"):
+                    outcomes.append(status)
+                    if len(outcomes) >= limit:
+                        return outcomes
+            last_key = resp.get("LastEvaluatedKey")
+            if not last_key:
+                break
+            kwargs["ExclusiveStartKey"] = last_key
+        return outcomes
+
     def has_recent_failure(self, flow_name: str, since: datetime) -> bool:
         resp = self._table.query(
             IndexName="FlowIndex",
