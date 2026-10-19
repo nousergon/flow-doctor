@@ -303,6 +303,8 @@ class FlowDoctor:
         # caller that logs success on "report id is not None" is wrong for
         # e.g. severity_filtered. See `last_dispatch_reason` / `last_dispatched`.
         self._last_dispatch_reason: Optional[str] = None
+        # Re-entrancy guard for the consecutive-unavailable-diagnosis alert.
+        self._in_diagnosis_streak_alert = False
 
         try:
             self._store = self._init_store(config)
@@ -1536,7 +1538,114 @@ class FlowDoctor:
                     "flow-doctor: failed to persist diagnosis-failure action "
                     "for report %s: %s", report.id, store_exc,
                 )
+            else:
+                self._check_diagnosis_unavailable_streak(report)
             return None
+
+    def _check_diagnosis_unavailable_streak(self, report: Report) -> None:
+        """Dispatch a CRITICAL when N diagnoses in a row came back unavailable.
+
+        alpha-engine-config-I7930 (I7789 deliverable 4). PR88 made ONE
+        unavailable diagnosis loud — stamped on its own report. A run of them
+        is a different fact: the diagnosis path itself is down, and every
+        report since reads "[DIAGNOSIS UNAVAILABLE]" as if that were normal.
+        Measured 2026-08-13 -> 2026-09-09 on nousergon-data: every issue for
+        four weeks carried no diagnosis and no surface said so (0.16.4 CHANGELOG entry).
+
+        Computed from this deployment's own store (the diagnosis Actions it
+        already records), not from the S3 changelog corpus: the store is the
+        one place every attempt lands, whatever notifiers a flow configures,
+        and the check runs at the moment the Nth failure happens rather than
+        on a sweep cadence. "Consecutive" means consecutive LLM attempts:
+        a usable diagnosis resets the run, a budget-degraded attempt is
+        skipped, and a knowledge-base hit — which never reaches the LLM —
+        says nothing about whether the LLM path works.
+
+        Fires when the run reaches exactly N, and again on the first attempt
+        of each UTC day while the run is still >= N — so a persisting outage
+        re-pages daily (`max_diagnosed_per_day` caps attempts per day) instead
+        of paging once and going quiet. Best-effort: never raises.
+        """
+        threshold = self.config.diagnosis.unavailable_alert_after
+        if threshold <= 0 or self._in_diagnosis_streak_alert:
+            return
+        flow = self.config.flow_name
+        try:
+            outcomes = self._store.recent_diagnosis_outcomes(flow, threshold + 1)
+            if outcomes is None:
+                _logger.warning(
+                    "flow-doctor: store %s cannot answer recent_diagnosis_outcomes; "
+                    "the consecutive-unavailable-diagnosis detector is inert",
+                    type(self._store).__name__,
+                )
+                return
+            failed = ActionStatus.FAILED.value
+            head = outcomes[:threshold]
+            if len(head) < threshold or any(o != failed for o in head):
+                return
+            reached_now = len(outcomes) == threshold or outcomes[threshold] != failed
+            first_today = (
+                not reached_now
+                and self._store.count_actions_today("diagnosis", flow) == 1
+            )
+            if not (reached_now or first_today):
+                return
+        except Exception as exc:  # noqa: BLE001 - observability must not break reporting
+            _logger.warning(
+                "flow-doctor: consecutive-unavailable-diagnosis check failed "
+                "for flow %s: %s", flow, exc,
+            )
+            return
+
+        run = f"{threshold}" if reached_now else f"at least {threshold}"
+        subject = (
+            f"[flow-doctor] {flow}: LLM diagnosis unavailable for {run} "
+            f"consecutive attempts"
+        )
+        body = (
+            f"The last {run} diagnosis attempts for flow '{flow}' all came back "
+            f"unavailable, so every report in that run was dispatched with no "
+            f"diagnosis. Latest error: {report.diagnosis_error}. "
+            f"Threshold: diagnosis.unavailable_alert_after={threshold}."
+        )
+        self._in_diagnosis_streak_alert = True
+        try:
+            # Built and dispatched directly rather than via notify_event: that
+            # path runs diagnosis on a CRITICAL, which would try the dead
+            # diagnosis path again for the alert about it. No dedup either —
+            # the reached-exactly-N / first-of-day rule above is the dedup,
+            # and a cooldown would swallow a second, distinct run.
+            alert = Report(
+                flow_name=flow,
+                severity=Severity.CRITICAL.value,
+                error_message=subject,
+                logs=body,
+                context=self._build_context({
+                    "detector": "diagnosis_unavailable_streak",
+                    "threshold": threshold,
+                    "trigger_report_id": report.id,
+                }),
+                error_signature=compute_signature_from_message(
+                    f"diagnosis-unavailable-streak:{flow}"
+                ),
+            )
+            alert.diagnosis_error = report.diagnosis_error
+            self._store.save_report(alert)
+            dispatch = self._send_notifications(alert, is_cascade=False, diagnosis=None)
+            self._record_decision(
+                report_id=alert.id,
+                error_signature=alert.error_signature,
+                reason=_classify_dispatch(dispatch),
+                detail="diagnosis_unavailable_streak",
+            )
+            _logger.error("%s", subject)
+        except Exception as exc:  # noqa: BLE001
+            _logger.warning(
+                "flow-doctor: failed to dispatch consecutive-unavailable-"
+                "diagnosis alert for flow %s: %s", flow, exc,
+            )
+        finally:
+            self._in_diagnosis_streak_alert = False
 
     def _load_git_context(self, report: Optional[Report] = None) -> Optional[dict]:
         """Load git context for diagnosis, preferring local over GitHub API.

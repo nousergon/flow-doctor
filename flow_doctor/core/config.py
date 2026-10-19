@@ -192,6 +192,14 @@ class DiagnosisConfig(_ConfigModel):
     confidence_calibration: float = 0.85
     timeout_seconds: int = 30
     max_daily_cost_usd: float = 1.00  # Hard cap on daily LLM spend
+    # Consecutive-unavailable-diagnosis detector (alpha-engine-config-I7930).
+    # When this many LLM diagnosis attempts IN A ROW for one flow come back
+    # unavailable (the FAILED action `_run_diagnosis` records), flow-doctor
+    # dispatches a CRITICAL — the diagnosis path being down is an outage of
+    # flow-doctor itself, not silence. 3 matches the fleet's
+    # `max_diagnosed_per_day: 3`, so one full day's diagnosis budget coming
+    # back unavailable is the trigger. 0 disables the detector.
+    unavailable_alert_after: int = 3
     # SFT capture (small-model distillation corpus, config#1541). When LLM
     # capture is enabled via the fleet env switch (LLM_SFT_CAPTURE_ENABLED /
     # ALPHA_ENGINE_DECISION_CAPTURE_ENABLED), each diagnosis call is appended
@@ -554,6 +562,7 @@ def load_config(
             confidence_calibration=float(diag_raw.get("confidence_calibration", 0.85)),
             timeout_seconds=int(diag_raw.get("timeout_seconds", 30)),
             max_daily_cost_usd=float(diag_raw.get("max_daily_cost_usd", 1.00)),
+            unavailable_alert_after=int(diag_raw.get("unavailable_alert_after", 3)),
             sft_sink_path=diag_raw.get("sft_sink_path"),
         )
     else:
@@ -576,6 +585,12 @@ def load_config(
         raise ConfigError(
             f"diagnosis.provider must be 'router' or 'openai_compat', got "
             f"'{diagnosis_config.provider}'"
+        )
+    if diagnosis_config.unavailable_alert_after < 0:
+        raise ConfigError(
+            "diagnosis.unavailable_alert_after must be >= 0 (0 disables the "
+            "consecutive-unavailable-diagnosis detector), got "
+            f"{diagnosis_config.unavailable_alert_after}"
         )
 
     # Parse github config

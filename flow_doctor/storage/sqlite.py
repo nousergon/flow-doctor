@@ -380,6 +380,19 @@ class SQLiteStorage(StorageBackend):
             ).fetchone()
         return row["cnt"] if row else 0
 
+    def recent_diagnosis_outcomes(
+        self, flow_name: str, limit: int
+    ) -> Optional[List[str]]:
+        conn = self._conn()
+        rows = conn.execute(
+            """SELECT status FROM actions
+               WHERE action_type = 'diagnosis' AND flow_name = ?
+               AND status IN ('sent', 'failed')
+               ORDER BY created_at DESC, rowid DESC LIMIT ?""",
+            (flow_name, limit),
+        ).fetchall()
+        return [r["status"] for r in rows]
+
     def has_recent_failure(self, flow_name: str, since: datetime) -> bool:
         conn = self._conn()
         row = conn.execute(
