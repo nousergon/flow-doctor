@@ -2205,6 +2205,15 @@ class FlowDoctor:
             components.append(f"remediation={mode}")
         else:
             components.append("remediation=off")
+        # Last, so existing readers of the leading components are undisturbed.
+        # The box venv's install step is quiet, so this line is the only place
+        # a run log proves which flow-doctor ran (alpha-engine-config-I7930).
+        try:
+            from flow_doctor.core.provenance import format_provenance, runtime_provenance
+
+            components.append(format_provenance(runtime_provenance()))
+        except Exception as e:  # never let a provenance probe break init
+            components.append(f"version=unknown(probe-error={type(e).__name__})")
 
         msg = f"[flow-doctor] initialized: {self.config.flow_name} ({', '.join(components)})"
         logging.getLogger("flow_doctor").info(msg)
