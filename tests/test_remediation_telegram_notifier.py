@@ -69,7 +69,10 @@ def test_send_raw_posts_text_to_chat_returns_target_id(no_krepis_transport):
         target = notifier.send_raw("hello remediation")
     assert target == "telegram:-100"
     payload = json.loads(mock_urlopen.call_args[0][0].data.decode("utf-8"))
-    assert payload["text"] == "hello remediation"
+    assert payload["text"] == (
+        "hello remediation\n\n*Auto-fix:* "
+        + __import__("flow_doctor.notify.telegram", fromlist=["x"]).DEFAULT_AUTO_FIX
+    )
     assert payload["chat_id"] == -100
     assert payload["parse_mode"] == "Markdown"  # default
 
@@ -125,7 +128,9 @@ def test_send_raw_truncates_at_telegram_4096_limit(no_krepis_transport):
         notifier.send_raw(long)
     payload = json.loads(mock_urlopen.call_args[0][0].data.decode("utf-8"))
     assert len(payload["text"]) == 4096
-    assert payload["text"].endswith("[truncated]")
+    # The Auto-fix line is kept past the cut (observability-policy).
+    assert "[truncated]" in payload["text"]
+    assert "\n*Auto-fix:* " in payload["text"]
 
 
 def test_send_raw_http_non_200_returns_none():
