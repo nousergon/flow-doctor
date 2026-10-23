@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import sys
 from typing import Any, Optional, Union
 from urllib.error import HTTPError, URLError
@@ -45,6 +46,12 @@ _logger = logging.getLogger("flow_doctor")
 # long traceback / log capture.
 _MAX_MESSAGE_LEN = 4096
 _TRUNCATION_SUFFIX = "\n…[truncated]"
+#: Used when the owning FlowDoctor did not describe its wiring.
+DEFAULT_AUTO_FIX = (
+    "Tonight's nightly sweep (7pm PT) root-causes this flow-doctor alert "
+    "and opens the fix."
+)
+_AUTO_FIX_RE = re.compile(r"(?im)^[ \t]*[*_<b>]*auto-fix[*_]?[ \t]*:")
 
 # Sentinel for ``send_raw`` overrides — lets us distinguish "caller
 # didn't pass this kwarg, use instance default" from "caller explicitly
@@ -78,6 +85,10 @@ class TelegramNotifier(Notifier):
         self.message_thread_id = message_thread_id
         self.parse_mode = parse_mode
         self.disable_notification = disable_notification
+        # Plain-text "Auto-fix:" description; FlowDoctor sets it from its own
+        # wiring (issue filing, remediation, fix PRs). Every alert carries the
+        # line (observability-policy § Notification — auto-fix line).
+        self.auto_fix: Optional[str] = None
 
     # ----- public API -----------------------------------------------------
 
@@ -194,8 +205,10 @@ class TelegramNotifier(Notifier):
     ) -> Optional[str]:
         self.last_error = None
         try:
-            text = self._format_message(report, flow_name, diagnosis)
-            text = _truncate(text)
+            text = self._format_message(
+                report, flow_name, diagnosis, auto_fix=self.auto_fix,
+            )
+            text = _truncate_keeping_auto_fix(text)
             if self._deliver_text(text):
                 return self._target_id()
             return None
@@ -234,7 +247,11 @@ class TelegramNotifier(Notifier):
         would otherwise mangle — are honoured. The sentinel lets us
         distinguish "use instance default" from "explicit None".
         """
-        text = _truncate(text)
+        if not _AUTO_FIX_RE.search(text):
+            mode = self.parse_mode if parse_mode is _UNSET else parse_mode
+            label = "*Auto-fix:*" if mode in ("Markdown", "MarkdownV2") else "Auto-fix:"
+            text = f"{text}\n\n{label} {self.auto_fix or DEFAULT_AUTO_FIX}"
+        text = _truncate_keeping_auto_fix(text) if "\n*Auto-fix:* " in text else _truncate(text)
         if self._deliver_text(
             text,
             parse_mode=parse_mode,
@@ -344,6 +361,7 @@ class TelegramNotifier(Notifier):
         report: Report,
         flow_name: str,
         diagnosis: Optional[Diagnosis] = None,
+        auto_fix: Optional[str] = None,
     ) -> str:
         severity_emoji = {
             "critical": "🔴",
@@ -400,7 +418,20 @@ class TelegramNotifier(Notifier):
             lines.append(f"_{report.diagnosis_error[:300]}_")
 
         lines.append(f"\n_Report ID: {report.id}_")
+        lines.append(f"\n*Auto-fix:* {auto_fix or DEFAULT_AUTO_FIX}")
         return "\n".join(lines)
+
+
+def _truncate_keeping_auto_fix(text: str) -> str:
+    """Truncate a formatted alert but keep its final ``Auto-fix:`` line."""
+    if len(text) <= _MAX_MESSAGE_LEN:
+        return text
+    head, sep, fix = text.rpartition("\n*Auto-fix:* ")
+    if not sep:
+        return _truncate(text)
+    tail = sep + fix
+    keep = max(_MAX_MESSAGE_LEN - len(tail) - len(_TRUNCATION_SUFFIX), 0)
+    return head[:keep] + _TRUNCATION_SUFFIX + tail
 
 
 def _truncate(text: str) -> str:

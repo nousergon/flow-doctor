@@ -759,6 +759,14 @@ class FlowDoctor:
                     getattr(nc, "notify_on_cascade", False)
                 )
 
+        # Every Telegram alert says what is being fixed automatically
+        # (observability-policy § Notification — auto-fix line). Derived from
+        # what this client actually has wired, never a fixed claim.
+        auto_fix_text = _describe_auto_fix(config, notifiers)
+        for n in notifiers:
+            if hasattr(n, "auto_fix"):
+                n.auto_fix = auto_fix_text
+
         return notifiers
 
     def _init_diagnosis(self, config: FlowDoctorConfig) -> None:
@@ -2239,3 +2247,25 @@ class FlowDoctor:
         except Exception as e:
             print(f"[flow-doctor] digest() error: {e}", file=sys.stderr)
             return None
+
+
+def _describe_auto_fix(config: "FlowDoctorConfig", notifiers: List["Notifier"]) -> str:
+    """Plain-text ``Auto-fix:`` description from this client's wiring."""
+    parts: List[str] = []
+    remediation = getattr(config, "remediation", None)
+    if remediation is not None and getattr(remediation, "enabled", False):
+        if getattr(remediation, "dry_run", True):
+            parts.append("remediation playbooks are evaluated (dry run, nothing executed)")
+        else:
+            parts.append("a matching remediation playbook runs automatically when confidence is high")
+    issue_repos = [
+        n for n in notifiers if getattr(n, "repo", None) and hasattr(n, "auto_fix_pr")
+    ]
+    for gh in issue_repos[:1]:
+        labels = ", ".join(getattr(gh, "labels", None) or ["flow-doctor"])
+        parts.append(f"filed as a GitHub issue in {gh.repo} (label {labels})")
+        if getattr(gh, "auto_fix_pr", False):
+            parts.append("a fix PR is drafted automatically from that issue")
+    parts.append("tonight's nightly sweep (7pm PT) root-causes it and opens the fix")
+    text = "; ".join(parts) + "."
+    return text[0].upper() + text[1:]
