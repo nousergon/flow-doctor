@@ -95,7 +95,7 @@ class TelegramNotifier(Notifier):
         message_thread_id: Optional[int] = None,
         parse_mode: Optional[str] = "Markdown",
         disable_notification: bool = False,
-    ):
+    ) -> None:
         self.bot_token = bot_token
         self.chat_id = chat_id
         self.message_thread_id = message_thread_id

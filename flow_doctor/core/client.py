@@ -14,7 +14,7 @@ import time
 import traceback as tb_module
 from contextlib import contextmanager
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Callable, Dict, FrozenSet, List, Optional
+from typing import TYPE_CHECKING, Any, Callable, Dict, FrozenSet, Generator, List, Optional
 
 if TYPE_CHECKING:
     from flow_doctor.core.builder import FlowDoctorBuilder
@@ -190,7 +190,7 @@ def _normalize_notify_on_category(raw: Optional[List[str]]) -> Optional[FrozenSe
 class _LogCaptureHandler(logging.Handler):
     """Non-propagating handler that buffers log records."""
 
-    def __init__(self, level: int = logging.DEBUG):
+    def __init__(self, level: int = logging.DEBUG) -> None:
         super().__init__(level)
         self.records: List[str] = []
 
@@ -263,7 +263,7 @@ class FlowDoctor:
         config = load_config(config_path=config_path, **kwargs)
         return cls(config, strict=strict)
 
-    def __init__(self, config: FlowDoctorConfig, *, strict: bool = True):
+    def __init__(self, config: FlowDoctorConfig, *, strict: bool = True) -> None:
         """Initialize a FlowDoctor instance.
 
         Args:
@@ -433,7 +433,7 @@ class FlowDoctor:
 
             result: Dict[str, Any] = {}
 
-            def _call(_notifier=_n, _result=result) -> None:
+            def _call(_notifier: "Notifier" = _n, _result: Dict[str, BaseException] = result) -> None:
                 try:
                     _notifier.validate()
                 except BaseException as exc:  # noqa: BLE001 - relayed to the main thread below
@@ -2022,7 +2022,7 @@ class FlowDoctor:
         }
 
     @contextmanager
-    def guard(self):
+    def guard(self) -> Generator[None, None, None]:
         """Context manager that reports and re-raises any exception.
 
         Usage:
@@ -2074,7 +2074,9 @@ class FlowDoctor:
         return wrapper
 
     @contextmanager
-    def capture_logs(self, level: int = logging.INFO, logger_name: Optional[str] = None):
+    def capture_logs(
+        self, level: int = logging.INFO, logger_name: Optional[str] = None
+    ) -> Generator["_LogCaptureHandler", None, None]:
         """Context manager that captures log records for attachment to reports.
 
         Usage:
