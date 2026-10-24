@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import platform
+import re
 import sys
 import threading
 import time
@@ -1853,7 +1854,17 @@ class FlowDoctor:
         cascade_skipped = 0
         failed: List[str] = []
 
-        for notifier in self._notifiers:
+        # Issue-filing notifiers run FIRST, so the issue they file (or the
+        # open one they matched) becomes every later alert's `Resolution:`
+        # line (observability-policy § Notification — auto-fix line; Brian
+        # 2026-10-24: every error and alert names the issue that resolves it).
+        # Stable sort: the relative order of every other notifier is unchanged.
+        ordered = sorted(
+            self._notifiers, key=lambda n: 0 if hasattr(n, "auto_fix_pr") else 1
+        )
+        resolution_issue_url: Optional[str] = None
+
+        for notifier in ordered:
             if recording_only and not notifier.records_on_dedup:
                 continue
 
@@ -1918,8 +1929,23 @@ class FlowDoctor:
             # None on failure. The target is persisted in actions.target
             # so operators can link back to the filed issue / sent email
             # from the DB.
+            if hasattr(notifier, "resolution"):
+                from flow_doctor.notify.telegram import resolution_for_issue
+
+                setattr(
+                    notifier,
+                    "resolution",
+                    resolution_for_issue(resolution_issue_url)
+                    if resolution_issue_url else None,
+                )
             try:
                 target = notifier.send(report, self.config.flow_name, diagnosis)
+                if (
+                    target
+                    and hasattr(notifier, "auto_fix_pr")
+                    and _ISSUE_URL_RE.match(str(target))
+                ):
+                    resolution_issue_url = str(target)
                 if not target:
                     # Carry the cause (alpha-engine-config-I7276): every
                     # notifier sets self.last_error on its failure path
@@ -2247,6 +2273,11 @@ class FlowDoctor:
         except Exception as e:
             print(f"[flow-doctor] digest() error: {e}", file=sys.stderr)
             return None
+
+
+#: A GitHub notifier target that names ONE issue (its fallback target is the
+#: repo's issue list, which is not a resolution).
+_ISSUE_URL_RE = re.compile(r"^https://github\.com/[^/\s]+/[^/\s]+/issues/\d+$")
 
 
 def _describe_auto_fix(config: "FlowDoctorConfig", notifiers: List["Notifier"]) -> str:
