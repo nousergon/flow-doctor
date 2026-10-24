@@ -72,6 +72,8 @@ def test_send_raw_posts_text_to_chat_returns_target_id(no_krepis_transport):
     assert payload["text"] == (
         "hello remediation\n\n*Auto-fix:* "
         + __import__("flow_doctor.notify.telegram", fromlist=["x"]).DEFAULT_AUTO_FIX
+        + "\n*Resolution:* "
+        + __import__("flow_doctor.notify.telegram", fromlist=["x"]).DEFAULT_RESOLUTION
     )
     assert payload["chat_id"] == -100
     assert payload["parse_mode"] == "Markdown"  # default

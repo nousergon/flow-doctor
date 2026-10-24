@@ -7,13 +7,14 @@ import json
 import logging
 import os
 import platform
+import re
 import sys
 import threading
 import time
 import traceback as tb_module
 from contextlib import contextmanager
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Callable, Dict, FrozenSet, List, Optional
+from typing import TYPE_CHECKING, Any, Callable, Dict, FrozenSet, Generator, List, Optional
 
 if TYPE_CHECKING:
     from flow_doctor.core.builder import FlowDoctorBuilder
@@ -189,7 +190,7 @@ def _normalize_notify_on_category(raw: Optional[List[str]]) -> Optional[FrozenSe
 class _LogCaptureHandler(logging.Handler):
     """Non-propagating handler that buffers log records."""
 
-    def __init__(self, level: int = logging.DEBUG):
+    def __init__(self, level: int = logging.DEBUG) -> None:
         super().__init__(level)
         self.records: List[str] = []
 
@@ -262,7 +263,7 @@ class FlowDoctor:
         config = load_config(config_path=config_path, **kwargs)
         return cls(config, strict=strict)
 
-    def __init__(self, config: FlowDoctorConfig, *, strict: bool = True):
+    def __init__(self, config: FlowDoctorConfig, *, strict: bool = True) -> None:
         """Initialize a FlowDoctor instance.
 
         Args:
@@ -432,7 +433,7 @@ class FlowDoctor:
 
             result: Dict[str, Any] = {}
 
-            def _call(_notifier=_n, _result=result) -> None:
+            def _call(_notifier: "Notifier" = _n, _result: Dict[str, BaseException] = result) -> None:
                 try:
                     _notifier.validate()
                 except BaseException as exc:  # noqa: BLE001 - relayed to the main thread below
@@ -1853,7 +1854,17 @@ class FlowDoctor:
         cascade_skipped = 0
         failed: List[str] = []
 
-        for notifier in self._notifiers:
+        # Issue-filing notifiers run FIRST, so the issue they file (or the
+        # open one they matched) becomes every later alert's `Resolution:`
+        # line (observability-policy § Notification — auto-fix line; Brian
+        # 2026-10-24: every error and alert names the issue that resolves it).
+        # Stable sort: the relative order of every other notifier is unchanged.
+        ordered = sorted(
+            self._notifiers, key=lambda n: 0 if hasattr(n, "auto_fix_pr") else 1
+        )
+        resolution_issue_url: Optional[str] = None
+
+        for notifier in ordered:
             if recording_only and not notifier.records_on_dedup:
                 continue
 
@@ -1918,8 +1929,23 @@ class FlowDoctor:
             # None on failure. The target is persisted in actions.target
             # so operators can link back to the filed issue / sent email
             # from the DB.
+            if hasattr(notifier, "resolution"):
+                from flow_doctor.notify.telegram import resolution_for_issue
+
+                setattr(
+                    notifier,
+                    "resolution",
+                    resolution_for_issue(resolution_issue_url)
+                    if resolution_issue_url else None,
+                )
             try:
                 target = notifier.send(report, self.config.flow_name, diagnosis)
+                if (
+                    target
+                    and hasattr(notifier, "auto_fix_pr")
+                    and _ISSUE_URL_RE.match(str(target))
+                ):
+                    resolution_issue_url = str(target)
                 if not target:
                     # Carry the cause (alpha-engine-config-I7276): every
                     # notifier sets self.last_error on its failure path
@@ -1996,7 +2022,7 @@ class FlowDoctor:
         }
 
     @contextmanager
-    def guard(self):
+    def guard(self) -> Generator[None, None, None]:
         """Context manager that reports and re-raises any exception.
 
         Usage:
@@ -2048,7 +2074,9 @@ class FlowDoctor:
         return wrapper
 
     @contextmanager
-    def capture_logs(self, level: int = logging.INFO, logger_name: Optional[str] = None):
+    def capture_logs(
+        self, level: int = logging.INFO, logger_name: Optional[str] = None
+    ) -> Generator["_LogCaptureHandler", None, None]:
         """Context manager that captures log records for attachment to reports.
 
         Usage:
@@ -2247,6 +2275,11 @@ class FlowDoctor:
         except Exception as e:
             print(f"[flow-doctor] digest() error: {e}", file=sys.stderr)
             return None
+
+
+#: A GitHub notifier target that names ONE issue (its fallback target is the
+#: repo's issue list, which is not a resolution).
+_ISSUE_URL_RE = re.compile(r"^https://github\.com/[^/\s]+/[^/\s]+/issues/\d+$")
 
 
 def _describe_auto_fix(config: "FlowDoctorConfig", notifiers: List["Notifier"]) -> str:
