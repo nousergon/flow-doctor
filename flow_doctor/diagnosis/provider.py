@@ -14,11 +14,12 @@ addressing any vendor directly.
 
 from __future__ import annotations
 
+import importlib
 import json
 import os
 import sys
 from abc import ABC, abstractmethod
-from typing import Optional
+from typing import Dict, List, Optional
 
 from flow_doctor.core.constants import DEFAULT_DIAGNOSIS_MODEL, LLM_MAX_TOKENS
 from flow_doctor.core.models import Diagnosis
@@ -44,6 +45,75 @@ DEFAULT_SFT_SINK_PATH = "_sft_raw/flow_doctor_diagnosis.sft.jsonl"
 # (alpha-engine-config-I12312). Deliberately distinct from SFT_PRODUCER above,
 # which is a corpus filter key with its own consumers.
 CALLSITE_ID = "flow-doctor-diagnosis"
+
+#: Parent-document namespace of every typed source a diagnosis trace cites.
+TRACE_SOURCE_PREFIX = "flow-doctor/report"
+
+
+def trace_sources_or_none(
+    context: DiagnosisContext, assembler: ContextAssembler, user_content: str
+) -> Optional[object]:
+    """The ``sources=`` for this diagnosis call's ``llm_trace.v1`` row, or
+    ``None`` (alpha-engine-config-I12312).
+
+    Each prompt section the model reads as evidence (the exception, the
+    traceback, the captured logs, the commit-range and git context, the
+    known failure patterns) becomes one typed ``artifact`` source whose
+    ``source_id`` is ``flow-doctor/report/<report id>#<section>``. Each is
+    located verbatim in ``user_content`` (:meth:`ContextAssembler
+    .locate_sources`), so the prompt is byte-for-byte what it was without
+    citations, and the trace's ``citations[]`` carry the sha256 of the exact
+    text sent and its offsets.
+
+    ``None`` — and therefore no ``sources=`` at all, exactly as before — when
+    the installed krepis predates ``krepis.llm_trace`` (the ``router`` extra
+    accepts krepis 0.17), when no section could be located, or when building
+    the sources fails for any reason: a citation problem never costs the
+    diagnosis.
+
+    Returns a ``krepis.llm_trace.RenderedSources``. krepis is an optional
+    dependency that is not installed where this package is type-checked, so
+    the module is imported by name and the return is typed ``object``.
+    """
+    try:
+        llm_trace = importlib.import_module("krepis.llm_trace")
+    except ImportError:
+        return None
+    try:
+        located = assembler.locate_sources(context, user_content)
+        if not located:
+            return None
+        if context.report_id:
+            document_id = f"{TRACE_SOURCE_PREFIX}/{context.report_id}"
+        else:
+            document_id = f"{TRACE_SOURCE_PREFIX}/unidentified/{context.flow_name}"
+        rendered: List[object] = []
+        for name, start, end in located:
+            text = user_content[start:end]
+            block = llm_trace.SourceBlock(
+                cid=name,
+                kind="artifact",
+                source_id=f"{document_id}#{name}",
+                text=text,
+                document_id=document_id,
+                meta={"section": name, "flow_name": context.flow_name},
+            )
+            rendered.append(
+                llm_trace.RenderedSource(
+                    block=block,
+                    content_sha256=llm_trace.sha256_hex(text),
+                    char_start=start,
+                    char_end=end,
+                )
+            )
+        return llm_trace.RenderedSources(text=user_content, sources=tuple(rendered))
+    except Exception as exc:  # noqa: BLE001 — a citation failure never costs the diagnosis
+        print(
+            f"[flow-doctor] WARNING: trace source rendering failed "
+            f"({type(exc).__name__}: {exc}); sending no sources=",
+            file=sys.stderr,
+        )
+        return None
 
 
 class DiagnosisProvider(ABC):
@@ -340,7 +410,7 @@ class OpenAICompatProvider(DiagnosisProvider):
         price_in_per_1m: Optional[float] = None,
         price_out_per_1m: Optional[float] = None,
         sft_sink_path: Optional[str] = None,
-    ):
+    ) -> None:
         self.api_key = api_key
         self.model = model
         self.base_url = base_url
@@ -461,13 +531,13 @@ class RouterProvider(DiagnosisProvider):
         confidence_calibration: float = 0.85,
         timeout_seconds: int = 30,
         sft_sink_path: Optional[str] = None,
-    ):
+    ) -> None:
         self.model_group = model_group
         self.confidence_calibration = confidence_calibration
         self.timeout_seconds = timeout_seconds
         self.sft_sink_path = sft_sink_path
 
-    def _resolve(self):
+    def _resolve(self) -> object:
         """Resolve ``self.model_group`` to a callable edge spec via krepis.
 
         Thin wrapper over the shared :func:`flow_doctor.core.router
@@ -499,12 +569,18 @@ class RouterProvider(DiagnosisProvider):
             timeout=float(self.timeout_seconds),
             max_retries=0,
         )
+        user_content = assembler.build_prompt(context)
+        call_kwargs: Dict[str, object] = {}
+        sources = trace_sources_or_none(context, assembler, user_content)
+        if sources is not None:
+            call_kwargs["sources"] = sources
         result = client.complete(
             system=assembler.system_prompt,
-            user_content=assembler.build_prompt(context),
+            user_content=user_content,
             max_tokens=LLM_MAX_TOKENS,
             cache_system=True,
             on_unsupported="drop",
+            **call_kwargs,
         )
 
         text = (result.text or "").strip()
