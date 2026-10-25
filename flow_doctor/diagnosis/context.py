@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import platform
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from flow_doctor.core.models import KnownPattern, Report
 
@@ -25,6 +25,25 @@ class DiagnosisContext:
     changed_files: Optional[str] = None
     sha_range_context: Optional[str] = None
     known_patterns: Optional[List[str]] = None
+    # The ``Report.id`` this context was assembled from. It is the parent
+    # document of every typed source the trace records (``trace_sources``),
+    # so an eval can join a diagnosis trace back to its report.
+    report_id: Optional[str] = None
+
+
+#: Typed-citation id of each prompt section, in prompt order. ``flow_context``
+#: (name, repo, runtime, dependency list) is configuration this process
+#: states about itself, not evidence the model reads, so it is never cited.
+CITED_SECTIONS = (
+    "exception",
+    "error_message",
+    "traceback",
+    "logs",
+    "commit_range",
+    "git_log",
+    "changed_files",
+    "known_patterns",
+)
 
 
 # Approximate chars-per-token for budget estimation
@@ -92,7 +111,7 @@ class ContextAssembler:
         self,
         repo: Optional[str] = None,
         dependencies: Optional[List[str]] = None,
-    ):
+    ) -> None:
         self.repo = repo
         self.dependencies = dependencies or []
 
@@ -129,26 +148,35 @@ class ContextAssembler:
             changed_files=git_context.get("changed_files") if git_context else None,
             sha_range_context=git_context.get("sha_range_context") if git_context else None,
             known_patterns=pattern_strs,
+            report_id=report.id,
         )
 
     def build_prompt(self, ctx: DiagnosisContext) -> str:
         """Build the user message for the LLM from a DiagnosisContext."""
-        sections = []
+        return "\n\n".join(header + body for _, header, body in self._sections(ctx))
+
+    def _sections(self, ctx: DiagnosisContext) -> List[Tuple[str, str, str]]:
+        """``(name, header, body)`` for each prompt section, in prompt order.
+
+        :meth:`build_prompt` joins exactly these, so :func:`trace_sources`
+        locates each body in the prompt without re-rendering it.
+        """
+        sections: List[Tuple[str, str, str]] = []
 
         # Exception
         if ctx.error_type:
-            sections.append(f"EXCEPTION:\n{ctx.error_type}: {ctx.error_message}")
+            sections.append(("exception", "EXCEPTION:\n", f"{ctx.error_type}: {ctx.error_message}"))
         else:
-            sections.append(f"ERROR MESSAGE:\n{ctx.error_message}")
+            sections.append(("error_message", "ERROR MESSAGE:\n", ctx.error_message))
 
         # Traceback
         if ctx.traceback:
-            sections.append(f"TRACEBACK:\n{ctx.traceback}")
+            sections.append(("traceback", "TRACEBACK:\n", ctx.traceback))
 
         # Logs
         if ctx.logs:
             line_count = ctx.logs.count("\n") + 1
-            sections.append(f"CAPTURED LOGS (last {line_count} lines):\n{ctx.logs}")
+            sections.append(("logs", f"CAPTURED LOGS (last {line_count} lines):\n", ctx.logs))
 
         # Flow context
         flow_lines = [f"- Name: {ctx.flow_name}"]
@@ -160,29 +188,54 @@ class ContextAssembler:
             dep_str = ", ".join(ctx.dependencies)
             status = ctx.dependency_status or "unknown"
             flow_lines.append(f"- Dependencies: {dep_str} (status: {status})")
-        sections.append("FLOW CONTEXT:\n" + "\n".join(flow_lines))
+        sections.append(("flow_context", "FLOW CONTEXT:\n", "\n".join(flow_lines)))
 
         # Commit-range context (deterministic, always placed before git-log)
         if ctx.sha_range_context:
-            sections.append(
-                f"DETERMINISTIC COMMIT-RANGE CONTEXT (ordering verified via "
-                f"git merge-base):\n{ctx.sha_range_context}"
-            )
+            sections.append((
+                "commit_range",
+                "DETERMINISTIC COMMIT-RANGE CONTEXT (ordering verified via git merge-base):\n",
+                ctx.sha_range_context,
+            ))
 
         # Git context
         if ctx.git_log:
-            sections.append(f"RECENT GIT CHANGES (last 7 days):\n{ctx.git_log}")
+            sections.append(("git_log", "RECENT GIT CHANGES (last 7 days):\n", ctx.git_log))
         if ctx.changed_files:
-            sections.append(f"CHANGED FILES:\n{ctx.changed_files}")
+            sections.append(("changed_files", "CHANGED FILES:\n", ctx.changed_files))
 
         # Known patterns
         if ctx.known_patterns:
-            sections.append(
-                "KNOWN FAILURE PATTERNS FOR THIS FLOW:\n"
-                + "\n".join(f"- {p}" for p in ctx.known_patterns)
-            )
+            sections.append((
+                "known_patterns",
+                "KNOWN FAILURE PATTERNS FOR THIS FLOW:\n",
+                "\n".join(f"- {p}" for p in ctx.known_patterns),
+            ))
 
-        return "\n\n".join(sections)
+        return sections
+
+    def locate_sources(
+        self, ctx: DiagnosisContext, user_content: str
+    ) -> List[Tuple[str, int, int]]:
+        """``(name, char_start, char_end)`` of each cited section's body in
+        ``user_content``, which must be the prompt that is actually sent.
+
+        A section is located by its header plus body, which must occur in
+        ``user_content`` exactly once; the offsets cover the body alone. A
+        section that is empty, not found, or found more than once is left
+        out rather than guessed, because an offset into the wrong place is a
+        citation to the wrong text.
+        """
+        located: List[Tuple[str, int, int]] = []
+        for name, header, body in self._sections(ctx):
+            if name not in CITED_SECTIONS or not body:
+                continue
+            needle = header + body
+            if user_content.count(needle) != 1:
+                continue
+            start = user_content.index(needle) + len(header)
+            located.append((name, start, start + len(body)))
+        return located
 
     @property
     def system_prompt(self) -> str:
