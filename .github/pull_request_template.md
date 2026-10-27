@@ -1,20 +1,31 @@
-## What & why
+<!--
+ONE paragraph, at most 120 words, four sentences in this order:
+  1. What changes, in plain words.
+  2. Why: the tracked issue, the observed defect (with its date), or the ruling.
+  3. Proof: what you ran BEFORE opening and its result ("will verify in CI" is not acceptable).
+  4. What the merge does: the workflow it triggers and what goes live, or that nothing does.
+No headings, tables, bullet lists, file lists or retold diff. A fifth sentence only for an
+out-of-scope finding (name the alpha-engine-config-I<N> it was filed as) or a cross-repo merge order.
+Rules: nous-ergon-ops policies/change-control-policy.md § PR body requirements.
 
-<!-- What does this change and why? Link any related issue. -->
+Before opening, confirm (do not paste into the body):
+  - tests added/updated; `pytest` passes; the coverage floor in pyproject.toml is a ratchet, never lowered
+  - CHANGELOG.md updated; `pyproject.toml::version` bumped if flow_doctor/** changed (version-bump-check.yml)
+  - no secrets or proprietary prompt content; fail-loud preserved outside the capture-path degrade exception
+-->
 
-## Checklist
 
-- [ ] Tests added/updated for the behavior change
-- [ ] `pytest` passes locally — the coverage floor in `pyproject.toml` is a ratchet, raised as coverage improves and never lowered to make a change pass
-- [ ] `CHANGELOG.md` updated
-- [ ] No secrets or proprietary prompt content committed
-- [ ] `pyproject.toml::version` bumped if this PR touches `flow_doctor/**` (see `version-bump-check.yml`)
-- [ ] Fail-loud preserved outside the deliberate capture-path degrade exception — no new silent `except: pass` swallows
+Tracker: alpha-engine-config-I
+Deploy-mechanism: N/A
+Merge: auto · Operator: none
 
-## Test plan
-
-<!-- How you verified this works. -->
-
----
-
-**Prepared by:** <!-- model name, e.g. claude-opus-5, claude-sonnet-5, claude-haiku-4-5 -->
+<!--
+Tracker: always. Add ` · Closes #<N>` only for an issue in THIS repo (the keyword is inert across repos).
+Deploy-mechanism: the workflow the merge triggers, or N/A. Machine-read keys (Tracker, Deploy-mechanism,
+  Depends-on, Verified-when) each start their own line; human-read fields share the Merge line.
+Merge: `auto` (standing lane, auto-merge armed) or `Brian, red line N (which)`:
+  1 access widening · 2 trading risk limits/sizing · 3 safety-guard weakening · 4 irreversible data delete · 5 budget increase.
+Operator: `none`, or `pre-merge`/`post-merge` plus the exact one-line guarded wrapper (registered in director/post-merge/).
+Last line, for agent-authored PRs (never a model name):
+🤖 Generated with [Claude Code](https://claude.com/claude-code) · https://claude.ai/code/session_…
+-->
