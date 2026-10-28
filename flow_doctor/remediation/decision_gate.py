@@ -10,7 +10,8 @@ import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Protocol, runtime_checkable
+from zoneinfo import ZoneInfo
 
 from flow_doctor.core.models import Diagnosis
 from flow_doctor.remediation.playbook import (
@@ -21,6 +22,18 @@ from flow_doctor.remediation.playbook import (
 )
 
 logger = logging.getLogger("flow_doctor.decision_gate")
+
+
+@runtime_checkable
+class _RemediationCounter(Protocol):
+    """The one storage method the gate reads (SQLite and DynamoDB both have it)."""
+
+    def count_remediations_today(self) -> int: ...
+
+
+#: The exchange clock. Market hours are read in this zone, never as a fixed
+#: UTC offset, so the guard holds across the US daylight-time changes.
+MARKET_TZ = ZoneInfo("America/New_York")
 
 
 class DecisionType(str, Enum):
@@ -78,8 +91,8 @@ class DecisionGate:
         self,
         playbook: Optional[Playbook] = None,
         config: Optional[GateConfig] = None,
-        store=None,
-    ):
+        store: object = None,
+    ) -> None:
         self.playbook = playbook or Playbook()
         self.config = config or GateConfig()
         self._store = store  # Optional SQLite store for persistent counting
@@ -190,7 +203,7 @@ class DecisionGate:
 
     def _get_daily_remediation_count(self) -> int:
         """Get today's remediation count — persistent (SQLite) or in-memory."""
-        if self._store:
+        if isinstance(self._store, _RemediationCounter):
             try:
                 return self._store.count_remediations_today()
             except Exception:
@@ -277,15 +290,19 @@ class DecisionGate:
         if playbook_match and playbook_match.action.safe_during_market_hours:
             return True
 
-        now = datetime.now(timezone.utc)
-        # Convert to ET (UTC-4 EDT / UTC-5 EST — approximate)
-        et_hour = (now.hour - 4) % 24
+        now_et = self._now().astimezone(MARKET_TZ)
+        et_hour = now_et.hour
         is_market_hours = self.config.market_open_hour <= et_hour < self.config.market_close_hour
-        is_weekday = now.weekday() < 5
+        is_weekday = now_et.weekday() < 5
 
         if is_market_hours and is_weekday:
             return False
         return True
+
+    @staticmethod
+    def _now() -> datetime:
+        """Current time, UTC-aware. A seam so tests can pin the clock."""
+        return datetime.now(timezone.utc)
 
     def _maybe_reset_daily_counts(self) -> None:
         """Reset daily counters at midnight."""
