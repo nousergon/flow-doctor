@@ -1,0 +1,29 @@
+# Jobs that may run on a pull_request event because their subject is the tree
+# (scm-platform-policy.md 3.1; alpha-engine-config-I9830). Schema and rules:
+# nousergon-lib src/nousergon_lib/pr_path_guard.py. A job-level `uses:` also
+# needs a `reusable` entry. A new PR-reachable job fails CI until it is here.
+schema_version: 1
+pr_reachable:
+  ci.yml:test: >-
+    Installs this checkout, runs basedpyright against the committed baseline
+    (compared with the PR's own base ref), ruff on changed files and pytest.
+    The one token-using step (coverage badge) is gated to push on main.
+  cost-gate.yml:cost-gate: >-
+    Grades the diff between base and head with the pinned nousergon-lib cost
+    gate; reads only the checkout.
+  version-bump-check.yml:version-bump-check: >-
+    Compares the PR's package version with its base ref and this repo's own
+    git tags; skips when flow_doctor/** is untouched. Reads no live system.
+  claude-md-guard.yml:claude-md-untracked: >-
+    nousergon-lib claude-md-guard.yml, SHA-pinned: `git ls-files` and
+    `git check-ignore` over the checkout; no secret, read-only token.
+  provider-linkage-guard.yml:guard: >-
+    nousergon-lib provider-linkage-guard.yml, SHA-pinned: greps the checkout
+    for direct provider linkage; no secret, read-only token.
+  pr-path-guard.yml:guard: >-
+    This guard: nousergon-lib pr-path-guard.yml, SHA-pinned, reads this
+    repo's workflow files and this allowlist; no secret, read-only token.
+reusable:
+  - claude-md-guard.yml:claude-md-untracked
+  - provider-linkage-guard.yml:guard
+  - pr-path-guard.yml:guard

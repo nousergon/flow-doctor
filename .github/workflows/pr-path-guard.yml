@@ -1,0 +1,21 @@
+name: PR-path live-state guard
+
+# Reusable-workflow caller: see nousergon-lib's pr-path-guard.yml and
+# src/nousergon_lib/pr_path_guard.py. scm-platform-policy.md 3.1: a check
+# grades the diff, and a live-state check does not belong on the
+# pull_request path. Every job reachable on a PR event must be declared, with
+# a reason, in .pr-reachable-jobs.yaml (this job included). Wired here by
+# alpha-engine-config-I9830.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  guard:
+    uses: nousergon/nousergon-lib/.github/workflows/pr-path-guard.yml@bcf1a1b8ec521440963e0a5bb2b0528982671bb6
