@@ -2108,14 +2108,6 @@
         ],
         "./flow_doctor/core/rate_limiter.py": [
             {
-                "code": "reportUnusedImport",
-                "range": {
-                    "startColumn": 48,
-                    "endColumn": 56,
-                    "lineCount": 1
-                }
-            },
-            {
                 "code": "reportDeprecated",
                 "range": {
                     "startColumn": 26,
