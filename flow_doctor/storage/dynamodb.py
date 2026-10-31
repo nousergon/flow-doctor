@@ -105,7 +105,7 @@ class DynamoDBStorage(StorageBackend):
         table_name: str,
         *,
         region: Optional[str] = None,
-    ):
+    ) -> None:
         if boto3 is None:
             raise ImportError(
                 "DynamoDB store requires boto3. Install flow-doctor[remediation] or boto3."
@@ -235,6 +235,10 @@ class DynamoDBStorage(StorageBackend):
         # ValidationException in production.
         if action.flow_name:
             item["flow_name"] = action.flow_name
+        # Top-level for the same reason: the rate limiter's count leaves out
+        # FAILED deliveries server-side (alpha-engine-config-I12711).
+        if action.status:
+            item["status"] = action.status
         self._table.put_item(Item=item)
 
     def save_decision(self, decision: Decision) -> None:
@@ -288,7 +292,11 @@ class DynamoDBStorage(StorageBackend):
         return counts
 
     def count_actions_today(
-        self, action_type: str, flow_name: Optional[str] = None
+        self,
+        action_type: str,
+        flow_name: Optional[str] = None,
+        *,
+        exclude_status: Optional[str] = None,
     ) -> int:
         """Count today's actions of *action_type*, scoped to *flow_name*.
 
@@ -303,6 +311,12 @@ class DynamoDBStorage(StorageBackend):
         partitioned on `action_type`, and re-keying it would be a migration
         with no benefit at this row count. Filtering is applied server-side
         after the key condition, so the returned COUNT is already scoped.
+
+        *exclude_status* filters on the top-level ``status`` attribute that
+        ``save_action`` writes (alpha-engine-config-I12711). A row written
+        before that attribute existed has no top-level ``status`` and is
+        COUNTED: an older row can only over-spend the budget for the rest of
+        the day it was written, never under-spend it.
         """
         today_start = datetime.combine(date.today(), datetime.min.time()).isoformat()
         kwargs: dict = {
@@ -314,9 +328,17 @@ class DynamoDBStorage(StorageBackend):
             },
             "Select": "COUNT",
         }
+        filters: List[str] = []
         if flow_name is not None:
-            kwargs["FilterExpression"] = "flow_name = :flow"
+            filters.append("flow_name = :flow")
             kwargs["ExpressionAttributeValues"][":flow"] = flow_name
+        if exclude_status is not None:
+            # `status` is a DynamoDB reserved word, hence the name placeholder.
+            filters.append("(attribute_not_exists(#st) OR #st <> :xstatus)")
+            kwargs["ExpressionAttributeNames"] = {"#st": "status"}
+            kwargs["ExpressionAttributeValues"][":xstatus"] = exclude_status
+        if filters:
+            kwargs["FilterExpression"] = " AND ".join(filters)
         resp = self._table.query(**kwargs)
         return int(resp.get("Count", 0))
 
