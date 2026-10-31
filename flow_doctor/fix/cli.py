@@ -437,8 +437,27 @@ def generate_fix(
         _comment_skipped(repo, issue_number, token, msg)
         return (FixOutcome.SKIPPED, msg)
 
+    # The rollback below undoes exactly this patch and nothing else, so it may
+    # only run over paths that were clean before the apply. A patch touching a
+    # file with uncommitted edits is refused before anything is written: the
+    # rollback could not tell those edits from the patch's, and the commit
+    # would carry them (alpha-engine-config-I12898).
+    dirty_before = changed_paths(repo_path)
+    if dirty_before is None:
+        msg = "git status unavailable — refusing to apply without a rollback baseline"
+        _comment_failure(repo, issue_number, token, msg)
+        return (FixOutcome.FAILED, msg)
+    overlap = sorted(set(inventory) & dirty_before)
+    if overlap:
+        msg = (
+            "Patch touches paths with uncommitted changes in the checkout: "
+            f"{', '.join(map(repr, overlap))}"
+        )
+        _comment_skipped(repo, issue_number, token, msg)
+        return (FixOutcome.SKIPPED, msg)
+
     # Apply diff. A diff that won't apply is a genuine fault (malformed patch).
-    dirty_before = changed_paths(repo_path) or set()
+    # `git apply --check` runs first, so a refused apply has changed nothing.
     if not PRCreator.apply_diff(repo_path, diff):
         msg = "Failed to apply generated diff"
         _comment_failure(repo, issue_number, token, msg)
@@ -449,7 +468,7 @@ def generate_fix(
     after = changed_paths(repo_path)
     stray = sorted((after or set()) - dirty_before - set(inventory)) if after is not None else []
     if after is None or stray:
-        PRCreator.reverse_diff(repo_path, diff)
+        _revert_changes(repo_path, diff, inventory)
         msg = (
             "Applied patch changed paths outside its approved inventory: "
             f"{', '.join(map(repr, stray)) or 'git status unavailable'}"
@@ -476,15 +495,19 @@ def generate_fix(
         # skip, not a fixer malfunction.
         attempt.rejection_reason = "Tests failed"
         _save_attempt(config, attempt)
-        # Revert changes
-        _revert_changes(repo_path)
+        if not _revert_changes(repo_path, diff, inventory):
+            msg = f"Tests failed and the patch could not be rolled back: {', '.join(inventory)}"
+            _comment_failure(repo, issue_number, token, msg)
+            return (FixOutcome.FAILED, msg)
         msg = f"Fix attempted but tests failed:\n```\n{test_output[:2000]}\n```"
         _comment_skipped(repo, issue_number, token, msg)
         return (FixOutcome.SKIPPED, "Tests failed after applying fix")
 
     # Dry run check
     if dry_run or af_config.dry_run:
-        _revert_changes(repo_path)
+        if not _revert_changes(repo_path, diff, inventory):
+            msg = f"Dry run could not roll back the patch: {', '.join(inventory)}"
+            return (FixOutcome.FAILED, msg)
         print("[flow-doctor] Dry run — skipping PR creation")
         print(f"[flow-doctor] Generated diff:\n{diff}")
         return (FixOutcome.CREATED, "Dry run successful — fix generated and tests passed")
@@ -629,16 +652,52 @@ def _save_attempt(config: FlowDoctorConfig, attempt: FixAttempt) -> None:
         pass
 
 
-def _revert_changes(repo_path: str) -> None:
-    """Revert any uncommitted changes."""
+def _revert_changes(repo_path: str, diff: str, inventory: List[str]) -> bool:
+    """Undo exactly the applied patch; never touch any other path.
+
+    This used to be ``git checkout .`` over the whole checkout, which discarded
+    every unrelated tracked edit on a dry run or a failed validation
+    (alpha-engine-config-I12898). Now: reverse the patch itself; if the test
+    run has since edited a patched file so the reverse no longer applies,
+    restore exactly the inventory paths to HEAD (and remove the ones HEAD does
+    not have). That fallback is safe only because ``generate_fix`` refuses a
+    patch touching a path that was dirty before the apply.
+
+    Returns True when the inventory is back at HEAD.
+    """
     import subprocess
+
+    if PRCreator.reverse_diff(repo_path, diff):
+        return True
+    print("[flow-doctor] Patch no longer reverses cleanly; restoring its "
+          f"{len(inventory)} path(s) to HEAD", file=sys.stderr)
+    root = Path(repo_path).resolve()
     try:
-        subprocess.run(
-            ["git", "checkout", "."],
-            cwd=repo_path, capture_output=True,
+        listed = subprocess.run(
+            ["git", "ls-tree", "-r", "-z", "--name-only", "HEAD", "--",
+             *(f":(literal){p}" for p in inventory)],
+            cwd=repo_path, capture_output=True, text=True, check=True,
         )
-    except Exception:
-        pass
+        in_head = {p for p in listed.stdout.split("\0") if p}
+        if in_head:
+            subprocess.run(
+                ["git", "checkout", "HEAD", "--", *(f":(literal){p}" for p in sorted(in_head))],
+                cwd=repo_path, capture_output=True, check=True,
+            )
+        for rel in sorted(set(inventory) - in_head):
+            # Confine before touching: the containing directory must resolve
+            # inside the checkout; the entry itself is removed, never followed.
+            target = root / rel
+            parent = target.parent.resolve()
+            if parent != root and root not in parent.parents:
+                return False
+            target = parent / target.name
+            if target.is_symlink() or target.is_file():
+                target.unlink()
+    except (subprocess.CalledProcessError, OSError) as e:
+        print(f"[flow-doctor] Rollback failed: {e}", file=sys.stderr)
+        return False
+    return True
 
 
 def main() -> None:
