@@ -12,13 +12,19 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.request import Request, urlopen
 
-from flow_doctor.core.config import AutoFixConfig, load_config
+from flow_doctor.core.config import AutoFixConfig, FlowDoctorConfig, load_config
 from flow_doctor.core.models import FixAttempt
 from flow_doctor.core.router import RouterUnresolvable
 from flow_doctor.fix.generator import FixGenerator
 from flow_doctor.fix.pr_creator import PRCreator
 from flow_doctor.fix.replay_store import ReplayStore
-from flow_doctor.fix.scope_guard import ScopeGuard
+from flow_doctor.fix.scope_guard import (
+    ScopeGuard,
+    changed_paths,
+    patch_inventory,
+    resolve_confined,
+    tracked_files,
+)
 from flow_doctor.fix.validator import TestValidator
 from flow_doctor.notify.github import GitHubNotifier
 
@@ -106,41 +112,61 @@ def _is_config_credentials_issue(root_cause: str) -> bool:
 
 
 def _read_file_contents(
-    repo_path: str, files: List[str]
+    repo_path: str,
+    files: List[str],
+    guard: Optional[ScopeGuard] = None,
+    refusals: Optional[List[str]] = None,
 ) -> Dict[str, str]:
-    """Read file contents from the local repo checkout."""
+    """Read diagnosis-named files from the local checkout, confined.
+
+    ``affected_files`` comes from issue metadata, so every name goes through
+    ``resolve_confined`` before anything is opened: it must be a regular,
+    tracked file inside ``repo_path``, allowed and not denied by ``guard``,
+    and not secret-shaped (alpha-engine-config-I12897). A refused name is
+    appended to ``refusals`` as ``path: reason`` and never read.
+    """
+    guard = guard or ScopeGuard(allow=[], deny=[])
+    tracked = tracked_files(repo_path)
     contents: Dict[str, str] = {}
     for f in files:
         # Strip line number references (e.g., "main.py:5" -> "main.py")
-        clean = f.split(":")[0]
-        path = Path(repo_path) / clean
-        if path.is_file():
-            try:
-                contents[clean] = path.read_text()
-            except Exception:
-                pass
+        clean = f.split(":")[0].strip()
+        path, reason = resolve_confined(repo_path, clean, tracked, guard)
+        if path is None:
+            if refusals is not None:
+                refusals.append(f"{clean!r}: {reason}")
+            print(f"[flow-doctor] refused context file {clean!r}: {reason}", file=sys.stderr)
+            continue
+        try:
+            contents[clean] = path.read_text()
+        except Exception:
+            pass
     return contents
 
 
 def _find_test_files(
-    repo_path: str, affected_files: List[str]
+    repo_path: str,
+    affected_files: List[str],
+    guard: Optional[ScopeGuard] = None,
 ) -> Dict[str, str]:
-    """Find and read test files corresponding to affected source files."""
-    contents: Dict[str, str] = {}
-    tests_dir = Path(repo_path) / "tests"
-    if not tests_dir.is_dir():
-        return contents
+    """Find and read ``tests/test_<stem>.py`` for each affected source file.
 
+    Same confined resolver as ``_read_file_contents``: a test file that is a
+    symlink, untracked, denied or secret-shaped is not read.
+    """
+    guard = guard or ScopeGuard(allow=[], deny=[])
+    tracked = tracked_files(repo_path)
+    contents: Dict[str, str] = {}
     for f in affected_files:
-        clean = f.split(":")[0]
-        stem = Path(clean).stem
-        # Look for test_<stem>.py
-        test_path = tests_dir / f"test_{stem}.py"
-        if test_path.is_file():
-            try:
-                contents[str(test_path.relative_to(repo_path))] = test_path.read_text()
-            except Exception:
-                pass
+        stem = Path(f.split(":")[0]).stem
+        rel = f"tests/test_{stem}.py"
+        path, _reason = resolve_confined(repo_path, rel, tracked, guard)
+        if path is None:
+            continue
+        try:
+            contents[rel] = path.read_text()
+        except Exception:
+            pass
     return contents
 
 
@@ -248,8 +274,17 @@ def generate_fix(
 
     print(f"[flow-doctor] Diagnosis: {category} | confidence={confidence:.0%} | files={affected_files}")
 
-    # Read file contents
-    file_contents = _read_file_contents(repo_path, affected_files)
+    # Read file contents — confined to tracked, in-scope repository files
+    # BEFORE anything is opened or sent to a model (alpha-engine-config-I12897).
+    scope_guard = ScopeGuard(allow=af_config.scope.allow, deny=af_config.scope.deny)
+    refusals: List[str] = []
+    file_contents = _read_file_contents(repo_path, affected_files, scope_guard, refusals)
+    if not file_contents and refusals:
+        # Every named file was refused by the read boundary: the guard
+        # working as designed, so a skip. The reasons name rules, not contents.
+        msg = f"No affected file passed the read boundary: {'; '.join(refusals)}"
+        _comment_skipped(repo, issue_number, token, msg)
+        return (FixOutcome.SKIPPED, msg)
     if not file_contents:
         # The diagnosis named files but none exist in the checkout — a real
         # fault (wrong checkout / stale paths), not a working-as-intended skip.
@@ -257,7 +292,11 @@ def generate_fix(
         _comment_failure(repo, issue_number, token, msg)
         return (FixOutcome.FAILED, msg)
 
-    test_contents = _find_test_files(repo_path, affected_files)
+    test_contents = _find_test_files(
+        repo_path,
+        list(file_contents),
+        ScopeGuard(allow=[], deny=af_config.scope.deny),
+    )
 
     # Check replay store for prior rejections
     prior_rejections: List[str] = []
@@ -385,17 +424,36 @@ def generate_fix(
 
     # Scope guard — a safety gate. Blocking an out-of-scope diff is the guard
     # working as intended, so withholding the PR is a skip, not a failure.
-    diff_files = FixGenerator.extract_files_from_diff(diff)
-    scope_guard = ScopeGuard(allow=af_config.scope.allow, deny=af_config.scope.deny)
-    passed, violations = scope_guard.check(diff_files)
+    # The inventory is every path the patch touches per Git AND its headers:
+    # deletions and both sides of a rename/copy (alpha-engine-config-I12896).
+    inventory, why = patch_inventory(repo_path, diff)
+    if inventory is None:
+        msg = f"Scope guard refused an unreadable patch: {why}"
+        _comment_skipped(repo, issue_number, token, msg)
+        return (FixOutcome.SKIPPED, msg)
+    passed, violations = scope_guard.check(inventory)
     if not passed:
         msg = f"Scope guard violations: {'; '.join(violations)}"
         _comment_skipped(repo, issue_number, token, msg)
         return (FixOutcome.SKIPPED, msg)
 
     # Apply diff. A diff that won't apply is a genuine fault (malformed patch).
+    dirty_before = changed_paths(repo_path) or set()
     if not PRCreator.apply_diff(repo_path, diff):
         msg = "Failed to apply generated diff"
+        _comment_failure(repo, issue_number, token, msg)
+        return (FixOutcome.FAILED, msg)
+
+    # Independent check: what the apply actually changed must be inside the
+    # approved inventory. Undo exactly this patch if it is not.
+    after = changed_paths(repo_path)
+    stray = sorted((after or set()) - dirty_before - set(inventory)) if after is not None else []
+    if after is None or stray:
+        PRCreator.reverse_diff(repo_path, diff)
+        msg = (
+            "Applied patch changed paths outside its approved inventory: "
+            f"{', '.join(map(repr, stray)) or 'git status unavailable'}"
+        )
         _comment_failure(repo, issue_number, token, msg)
         return (FixOutcome.FAILED, msg)
 
@@ -435,7 +493,7 @@ def generate_fix(
     base_branch = _get_default_branch(repo_path)
     branch = PRCreator.create_branch(repo_path, flow_name)
     commit_msg = f"fix({flow_name}): auto-fix for {category.lower()} issue\n\nDiagnosis: {root_cause[:200]}\nIssue: #{issue_number}\n\nGenerated by Flow Doctor"
-    if not PRCreator.commit_and_push(repo_path, branch, commit_msg):
+    if not PRCreator.commit_and_push(repo_path, branch, commit_msg, paths=inventory):
         msg = "Failed to push fix branch"
         _comment_failure(repo, issue_number, token, msg)
         return (FixOutcome.FAILED, msg)
@@ -483,7 +541,7 @@ def generate_fix(
     return (FixOutcome.CREATED, f"PR created: {pr_url}")
 
 
-def _notify_telegram_pr(config, flow_name: str, pr_url: str, issue_number: int) -> None:
+def _notify_telegram_pr(config: FlowDoctorConfig, flow_name: str, pr_url: str, issue_number: int) -> None:
     """Send a Telegram ping announcing an auto-generated fix PR.
 
     Honours a ``telegram`` notifier in the flow-doctor config (creds already
@@ -560,7 +618,7 @@ def _comment_failure(repo: str, issue_number: int, token: str, reason: str) -> N
     print(f"[flow-doctor] Fix FAILED: {reason}", file=sys.stderr)
 
 
-def _save_attempt(config, attempt: FixAttempt) -> None:
+def _save_attempt(config: FlowDoctorConfig, attempt: FixAttempt) -> None:
     """Best-effort save of fix attempt to storage."""
     try:
         from flow_doctor.storage.sqlite import SQLiteStorage

@@ -66,17 +66,56 @@ class PRCreator:
         return True
 
     @staticmethod
-    def commit_and_push(repo_path: str, branch: str, message: str) -> bool:
-        """Stage all changes, commit, and push the branch.
+    def reverse_diff(repo_path: str, diff: str) -> bool:
+        """Undo exactly ``diff`` (``git apply -R``), leaving other edits alone."""
+        result = subprocess.run(
+            ["git", "apply", "-R", "-"],
+            input=diff,
+            cwd=repo_path,
+            capture_output=True,
+            text=True,
+        )
+        return result.returncode == 0
+
+    @staticmethod
+    def commit_and_push(
+        repo_path: str, branch: str, message: str, paths: Optional[List[str]] = None,
+    ) -> bool:
+        """Stage the change, commit, and push the branch.
+
+        With ``paths`` (the approved patch inventory), only those paths are
+        staged, and the staged set is read back and must be non-empty and
+        inside ``paths`` before anything is committed — test residue or any
+        other worktree change never rides the fix (alpha-engine-config-I12896).
+        Without it, every change is staged (legacy behaviour).
 
         Returns:
             True on success.
         """
         try:
-            subprocess.run(
-                ["git", "add", "-A"],
-                cwd=repo_path, check=True, capture_output=True,
-            )
+            if paths is None:
+                subprocess.run(
+                    ["git", "add", "-A"],
+                    cwd=repo_path, check=True, capture_output=True,
+                )
+            else:
+                subprocess.run(
+                    ["git", "add", "-A", "--", *(f":(literal){p}" for p in paths)],
+                    cwd=repo_path, check=True, capture_output=True,
+                )
+                staged = subprocess.run(
+                    ["git", "diff", "--cached", "--no-renames", "--name-only", "-z"],
+                    cwd=repo_path, check=True, capture_output=True, text=True,
+                )
+                staged_paths = {p for p in staged.stdout.split("\0") if p}
+                outside = sorted(staged_paths - set(paths))
+                if not staged_paths or outside:
+                    print(
+                        "[flow-doctor] Staged change does not match the approved "
+                        f"inventory (outside: {outside!r}, staged: {len(staged_paths)})",
+                        file=sys.stderr,
+                    )
+                    return False
             subprocess.run(
                 ["git", "commit", "-m", message],
                 cwd=repo_path, check=True, capture_output=True,

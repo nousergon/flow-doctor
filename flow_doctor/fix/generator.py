@@ -8,6 +8,7 @@ from typing import Dict, List, Optional
 from flow_doctor.core.constants import DEFAULT_DIAGNOSIS_MODEL, LLM_MAX_TOKENS
 from flow_doctor.core.router import resolve_router_edge
 from flow_doctor.fix.prompts import SYSTEM_PROMPT, build_fix_prompt
+from flow_doctor.fix.scope_guard import header_paths
 
 # The id this call site emits on every LLM call and cost record. It must match
 # the `id:` of its row in alpha-engine-config's LLM_CALLSITE_REGISTRY.yaml,
@@ -57,7 +58,7 @@ class FixGenerator:
         model_group: Optional[str] = None,
         *,
         provider: str,
-    ):
+    ) -> None:
         if provider not in _VALID_PROVIDERS:
             hint = (
                 " 'anthropic' was removed in 0.15.0 — set provider='router' "
@@ -202,11 +203,11 @@ class FixGenerator:
 
     @staticmethod
     def extract_files_from_diff(diff: str) -> List[str]:
-        """Extract file paths from a unified diff."""
-        files = []
-        for line in diff.split("\n"):
-            if line.startswith("+++ b/"):
-                path = line[6:]
-                if path and path != "/dev/null":
-                    files.append(path)
-        return files
+        """Extract every file path a unified diff names, both sides.
+
+        Deletions (``--- a/x`` / ``+++ /dev/null``) and rename/copy sources
+        count, not only ``+++ b/`` destinations (alpha-engine-config-I12896).
+        The scope decision itself uses ``scope_guard.patch_inventory``, which
+        also asks Git; this is the textual half of that reading.
+        """
+        return header_paths(diff)

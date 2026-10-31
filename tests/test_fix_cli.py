@@ -289,6 +289,11 @@ def _provider_gate_issue():
 
 def _write_repo_with_diagnosis_config(tmp_path, diagnosis_yaml_block):
     (tmp_path / "main.py").write_text("def run():\n    return 1\n")
+    # A git checkout with main.py tracked: the read boundary only reads
+    # tracked files (alpha-engine-config-I12897).
+    import subprocess
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", "main.py"], cwd=tmp_path, check=True)
     cfg_file = tmp_path / "flow-doctor.yaml"
     # `store` MUST be pinned to tmp_path: past the provider gates, generate_fix
     # opens a real SQLiteStorage at config.store.path (default "flow_doctor.db",
