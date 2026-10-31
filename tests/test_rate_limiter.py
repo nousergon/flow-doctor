@@ -362,3 +362,49 @@ def test_exempt_severities_still_bypass_the_scoped_budget():
     assert rl.check(ActionType.EMAIL_ALERT.value, severity="error") == "allow"
     assert rl.check(ActionType.EMAIL_ALERT.value, severity="critical") == "allow"
     assert rl.check(ActionType.EMAIL_ALERT.value, severity="warning") == "degrade"
+
+
+def test_failed_deliveries_do_not_spend_the_alert_budget():
+    """alpha-engine-config-I12711: on 2026-10-26 seven FAILED executor sends
+    spent the 10/day `telegram_alert` budget, and the cap then held a trade
+    alert. A delivery that reached nobody is not an alert the cap counts."""
+    store = _make_store()
+    rl = RateLimiter(store, RateLimitConfig(max_alerts_per_day=2), flow_name="executor")
+    for _ in range(5):
+        store.save_action(Action(
+            report_id="r", action_type="telegram_alert",
+            status=ActionStatus.FAILED.value, flow_name="executor",
+        ))
+    assert rl.check("telegram_alert") == "allow"
+
+    store.save_action(Action(
+        report_id="r", action_type="telegram_alert",
+        status=ActionStatus.SENT.value, flow_name="executor",
+    ))
+    assert rl.check("telegram_alert") == "allow"
+
+
+def test_degraded_rows_still_count_toward_the_budget():
+    """The first-crossing ERROR (`today_count == limit`) relies on DEGRADED rows
+    pushing the count past the limit, so they must stay in the count."""
+    store = _make_store()
+    rl = RateLimiter(store, RateLimitConfig(max_alerts_per_day=2), flow_name="executor")
+    for status in (ActionStatus.SENT.value, ActionStatus.DEGRADED.value):
+        store.save_action(Action(
+            report_id="r", action_type="telegram_alert",
+            status=status, flow_name="executor",
+        ))
+    assert rl.check("telegram_alert") == "degrade"
+
+
+def test_failed_diagnoses_still_spend_the_diagnosis_budget():
+    """A FAILED diagnosis still made an LLM call, so only alert budgets leave
+    FAILED rows out; the diagnosis cap keeps counting them."""
+    store = _make_store()
+    rl = RateLimiter(store, RateLimitConfig(max_diagnosed_per_day=2), flow_name="executor")
+    for _ in range(2):
+        store.save_action(Action(
+            report_id="r", action_type="diagnosis",
+            status=ActionStatus.FAILED.value, flow_name="executor",
+        ))
+    assert rl.check("diagnosis") == "degrade"

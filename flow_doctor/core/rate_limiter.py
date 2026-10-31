@@ -6,7 +6,7 @@ import logging
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Optional
 
-from flow_doctor.core.models import ActionType, Severity
+from flow_doctor.core.models import ActionStatus, ActionType
 
 if TYPE_CHECKING:
     from flow_doctor.storage.base import StorageBackend
@@ -38,7 +38,7 @@ class RateLimiter:
         store: StorageBackend,
         config: RateLimitConfig,
         flow_name: Optional[str] = None,
-    ):
+    ) -> None:
         self.store = store
         self.config = config
         # The budget reads as per-component in every config file — each declares
@@ -110,7 +110,18 @@ class RateLimiter:
             )
             return "allow"
 
-        today_count = self.store.count_actions_today(action, self.flow_name)
+        # FAILED alert deliveries do not spend the alert budget
+        # (alpha-engine-config-I12711). That cap counts alerts that reached a
+        # human; on 2026-10-26 seven failed executor sends spent the 10/day
+        # `telegram_alert` budget and the cap then held a trade alert. Alert
+        # actions only: a FAILED diagnosis or issue attempt still spent an LLM
+        # call or an API write, so those budgets keep counting it. DEGRADED
+        # rows still count everywhere: the first-crossing ERROR below relies
+        # on them.
+        exclude = ActionStatus.FAILED.value if action in _ALERT_ACTIONS else None
+        today_count = self.store.count_actions_today(
+            action, self.flow_name, exclude_status=exclude
+        )
         if today_count < limit:
             return "allow"
 
@@ -152,7 +163,7 @@ class RateLimiter:
 class CascadeDetector:
     """Detect if a failure is caused by an upstream dependency failure."""
 
-    def __init__(self, store: StorageBackend, window_hours: int = 4):
+    def __init__(self, store: StorageBackend, window_hours: int = 4) -> None:
         self.store = store
         self.window_hours = window_hours
 

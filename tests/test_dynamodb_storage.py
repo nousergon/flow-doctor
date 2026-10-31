@@ -164,3 +164,43 @@ def test_save_action_omits_an_absent_flow_name(store):
     assert store.count_actions_today("email_alert") == 1
     # An unscoped row belongs to no flow's budget rather than to a "" flow.
     assert store.count_actions_today("email_alert", "executor") == 0
+
+
+def test_count_actions_today_can_exclude_failed_deliveries(store):
+    """alpha-engine-config-I12711: the rate limiter excludes FAILED rows
+    server-side, which needs `status` written as a top-level attribute."""
+    from flow_doctor.core.models import Action
+
+    for status in ("failed", "failed", "sent", "degraded"):
+        store.save_action(
+            Action(
+                report_id="r", action_type="telegram_alert",
+                status=status, flow_name="executor",
+            )
+        )
+
+    assert store.count_actions_today("telegram_alert", "executor") == 4
+    assert store.count_actions_today(
+        "telegram_alert", "executor", exclude_status="failed"
+    ) == 2
+    assert store.count_actions_today("telegram_alert", exclude_status="failed") == 2
+
+
+def test_a_row_without_top_level_status_is_counted(store):
+    """Rows written before `status` was top-level carry it only in `payload`.
+    They are counted, so a legacy row can over-spend the budget for the day it
+    was written but never let a failure hide inside the cap."""
+    import json
+    from datetime import datetime
+
+    store._table.put_item(
+        Item={
+            "pk": "ACTION#legacy", "sk": "META", "entity": "action",
+            "action_type": "telegram_alert", "flow_name": "executor",
+            "created_at": datetime.utcnow().isoformat(),
+            "payload": json.dumps({"status": "failed"}),
+        }
+    )
+    assert store.count_actions_today(
+        "telegram_alert", "executor", exclude_status="failed"
+    ) == 1

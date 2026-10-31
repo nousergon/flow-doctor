@@ -61,3 +61,28 @@ def test_init_schema_is_idempotent_over_the_migration():
         for r in store._conn().execute("PRAGMA table_info(actions)")
     }
     assert "flow_name" in cols
+
+
+def test_count_actions_today_can_exclude_failed_deliveries():
+    """alpha-engine-config-I12711: both backends answer the rate limiter's
+    question the same way."""
+    import tempfile
+
+    from flow_doctor.core.models import Action
+    from flow_doctor.storage.sqlite import SQLiteStorage
+
+    f = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+    store = SQLiteStorage(f.name)
+    store.init_schema()
+    for status in ("failed", "failed", "sent", "degraded"):
+        store.save_action(
+            Action(
+                report_id="r", action_type="telegram_alert",
+                status=status, flow_name="executor",
+            )
+        )
+    assert store.count_actions_today("telegram_alert", "executor") == 4
+    assert store.count_actions_today(
+        "telegram_alert", "executor", exclude_status="failed"
+    ) == 2
+    assert store.count_actions_today("telegram_alert", exclude_status="failed") == 2

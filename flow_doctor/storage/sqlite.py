@@ -140,7 +140,7 @@ CREATE INDEX IF NOT EXISTS idx_decisions_flow_created ON decisions(flow_name, cr
 class SQLiteStorage(StorageBackend):
     """SQLite-backed storage. Thread-safe via per-thread connections."""
 
-    def __init__(self, db_path: str = "flow_doctor.db"):
+    def __init__(self, db_path: str = "flow_doctor.db") -> None:
         self.db_path = db_path
         self._local = threading.local()
 
@@ -354,7 +354,11 @@ class SQLiteStorage(StorageBackend):
         return row[0] if row else 0
 
     def count_actions_today(
-        self, action_type: str, flow_name: Optional[str] = None
+        self,
+        action_type: str,
+        flow_name: Optional[str] = None,
+        *,
+        exclude_status: Optional[str] = None,
     ) -> int:
         """Count today's actions of *action_type*, scoped to *flow_name*.
 
@@ -363,21 +367,20 @@ class SQLiteStorage(StorageBackend):
         single-flow, so the bug did not bite here — but the two backends must
         answer the same question the same way, or a local reproduction of a
         production rate-limit decision silently disagrees with it.
+        *exclude_status* drops rows of that status from the count
+        (alpha-engine-config-I12711).
         """
         conn = self._conn()
         today_start = datetime.combine(date.today(), datetime.min.time()).isoformat()
-        if flow_name is None:
-            row = conn.execute(
-                "SELECT COUNT(*) as cnt FROM actions "
-                "WHERE action_type = ? AND created_at >= ?",
-                (action_type, today_start),
-            ).fetchone()
-        else:
-            row = conn.execute(
-                "SELECT COUNT(*) as cnt FROM actions "
-                "WHERE action_type = ? AND created_at >= ? AND flow_name IS ?",
-                (action_type, today_start, flow_name),
-            ).fetchone()
+        sql = "SELECT COUNT(*) as cnt FROM actions WHERE action_type = ? AND created_at >= ?"
+        params: List[str] = [action_type, today_start]
+        if flow_name is not None:
+            sql += " AND flow_name IS ?"
+            params.append(flow_name)
+        if exclude_status is not None:
+            sql += " AND status != ?"
+            params.append(exclude_status)
+        row = conn.execute(sql, params).fetchone()
         return row["cnt"] if row else 0
 
     def recent_diagnosis_outcomes(

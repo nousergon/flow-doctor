@@ -55,9 +55,17 @@ class StorageBackend(ABC):
 
     @abstractmethod
     def count_actions_today(
-        self, action_type: str, flow_name: Optional[str] = None
+        self,
+        action_type: str,
+        flow_name: Optional[str] = None,
+        *,
+        exclude_status: Optional[str] = None,
     ) -> int:
         """Count today's (UTC) actions of *action_type*.
+
+        When *exclude_status* is given, rows with that status are not counted.
+        The rate limiter passes ``failed``: a delivery that never reached anyone
+        must not spend the daily alert budget (alpha-engine-config-I12711).
 
         When *flow_name* is given the count is scoped to that flow. Backends
         sharing one store MUST honour it: an unscoped count makes every flow's
