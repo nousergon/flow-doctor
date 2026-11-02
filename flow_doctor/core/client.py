@@ -1277,9 +1277,16 @@ class FlowDoctor:
         if captured_logs is None and self._log_handler is not None:
             captured_logs = "\n".join(self._log_handler.records)
 
-        # Scrub secrets from traceback and context
+        # Scrub secrets from everything a notifier can send: the traceback,
+        # the error message and the captured logs. The message and logs used
+        # to go out unscrubbed, so an HTTPError naming a URL with ?apiKey=
+        # reached Telegram verbatim (nous-ergon-ops-I2002). The signature
+        # above is computed first, so dedup grouping is unchanged.
         if traceback_str:
             traceback_str = self._scrubber.scrub_string(traceback_str)
+        error_message = self._scrubber.scrub_string(error_message)
+        if captured_logs:
+            captured_logs = self._scrubber.scrub_string(captured_logs)
         enriched_context = self._build_context(context)
 
         # Dedup check. A hit skips DELIVERY (email/Telegram/GitHub) but still

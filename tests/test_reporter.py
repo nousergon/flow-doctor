@@ -114,6 +114,19 @@ class TestReport:
         reports = fd.history(limit=1)
         assert "AKIAIOSFODNN7EXAMPLE" not in (reports[0].traceback or "")
 
+    def test_report_scrubs_error_message_and_logs(self):
+        """The message and captured logs reach notifiers too, not only the
+        traceback (nous-ergon-ops-I2002: an HTTPError URL carrying apiKey=)."""
+        fake = "FAKEpolygonKEY0123456789abcdefXY"
+        url = f"https://api.polygon.io/v3/x?cursor=1&apiKey={fake}"
+        fd, _ = _make_fd()
+        fd.report(RuntimeError(f"429 for url: {url}"), logs=f"GET {url} -> 429")
+
+        report = fd.history(limit=1)[0]
+        assert fake not in report.error_message
+        assert fake not in (report.logs or "")
+        assert "[REDACTED]" in report.error_message
+
 
 class TestGuard:
     def test_guard_reports_and_reraises(self):
