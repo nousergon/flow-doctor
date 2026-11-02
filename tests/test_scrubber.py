@@ -79,3 +79,28 @@ def test_scrub_empty_string():
     s = Scrubber()
     assert s.scrub_string("") == ""
     assert s.scrub_string(None) is None
+
+
+_FAKE_QUERY_KEY = "FAKEpolygonKEY0123456789abcdefXY"
+
+
+def test_scrub_url_query_credential_any_case():
+    """Polygon spells it apiKey; a page URL carrying it twice reached a
+    Telegram alert verbatim on 2026-10-02 (nous-ergon-ops-I2002)."""
+    s = Scrubber()
+    text = (
+        "429 Client Error: Too Many Requests for url: "
+        "https://api.polygon.io/v3/reference/dividends?cursor=abc"
+        f"&apiKey={_FAKE_QUERY_KEY}&APIKEY={_FAKE_QUERY_KEY}&limit=1000"
+    )
+    result = s.scrub_string(text)
+    assert _FAKE_QUERY_KEY not in result
+    assert result.count(REDACTED) == 2
+    assert "&limit=1000" in result
+    assert "cursor=abc" in result
+
+
+def test_short_url_query_value_is_kept():
+    """Below the 16-char floor a query value is an id, not a credential."""
+    s = Scrubber()
+    assert s.scrub_string("https://x.test/p?key=abc123&y=1") == "https://x.test/p?key=abc123&y=1"

@@ -19,6 +19,14 @@ _DEFAULT_PATTERNS: List[Pattern[str]] = [
     re.compile(r"://[^:]+:([^@]+)@"),
 ]
 
+# Credentials passed as URL query parameters. Same parameter set and 16-char
+# floor as krepis.logging's redaction filter, so short ID-like values stay.
+_URL_QUERY_CREDENTIAL: Pattern[str] = re.compile(
+    r"([?&](?:apikey|api_key|key|token|access_token|auth_token)=)"
+    r"[A-Za-z0-9_\-.]{16,}",
+    re.IGNORECASE,
+)
+
 # Environment variable names that should have their values scrubbed
 _SECRET_ENV_SUFFIXES = ("_KEY", "_SECRET", "_PASSWORD", "_TOKEN", "_CREDENTIAL", "_API_KEY")
 _SECRET_ENV_NAMES = {
@@ -39,7 +47,7 @@ REDACTED = "[REDACTED]"
 class Scrubber:
     """Scrubs secrets from strings and dicts."""
 
-    def __init__(self, extra_patterns: Optional[List[str]] = None):
+    def __init__(self, extra_patterns: Optional[List[str]] = None) -> None:
         self._patterns = list(_DEFAULT_PATTERNS)
         if extra_patterns:
             for p in extra_patterns:
@@ -56,6 +64,11 @@ class Scrubber:
         result = re.sub(r"Bearer\s+[A-Za-z0-9\-._~+/]+=*", f"Bearer {REDACTED}", result, flags=re.IGNORECASE)
         # Scrub passwords in URLs
         result = re.sub(r"(://[^:]+:)([^@]+)(@)", rf"\1{REDACTED}\3", result)
+        # Scrub credentials carried as URL query parameters (?apiKey=...).
+        # requests puts the full URL in HTTPError text, and a Polygon page
+        # URL put the live key into a Telegram alert on 2026-10-02
+        # (nous-ergon-ops-I2002). Case-insensitive: Polygon spells it apiKey.
+        result = _URL_QUERY_CREDENTIAL.sub(rf"\1{REDACTED}", result)
         # Scrub any extra user-defined patterns
         for pattern in self._patterns[3:]:  # skip the first 3 we already handled
             if pattern.pattern not in (p.pattern for p in _DEFAULT_PATTERNS[:3]):
