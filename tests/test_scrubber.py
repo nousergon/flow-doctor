@@ -104,3 +104,18 @@ def test_short_url_query_value_is_kept():
     """Below the 16-char floor a query value is an id, not a credential."""
     s = Scrubber()
     assert s.scrub_string("https://x.test/p?key=abc123&y=1") == "https://x.test/p?key=abc123&y=1"
+
+
+def test_url_encoded_query_credential_is_scrubbed_whole():
+    """Codex review 2026-11-03: a percent escape before the 16th character
+    left the whole token in place."""
+    s = Scrubber()
+    out = s.scrub_string("GET /x?access_token=abc%2Fdef0123456789abcdef0123456789&n=1")
+    assert "def0123456789" not in out
+    assert out.endswith("&n=1")
+
+
+def test_html_escaped_query_separator_is_scrubbed():
+    s = Scrubber()
+    out = s.scrub_string(f"https://x.test/p?cursor=1&amp;apiKey={_FAKE_QUERY_KEY}")
+    assert _FAKE_QUERY_KEY not in out

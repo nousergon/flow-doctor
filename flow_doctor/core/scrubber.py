@@ -22,8 +22,10 @@ _DEFAULT_PATTERNS: List[Pattern[str]] = [
 # Credentials passed as URL query parameters. Same parameter set and 16-char
 # floor as krepis.logging's redaction filter, so short ID-like values stay.
 _URL_QUERY_CREDENTIAL: Pattern[str] = re.compile(
-    r"([?&](?:apikey|api_key|key|token|access_token|auth_token)=)"
-    r"[A-Za-z0-9_\-.]{16,}",
+    # `&amp;` is an HTML-escaped separator; `%`, `+`, `/`, `=`, `~` let a
+    # URL-encoded token match whole instead of stopping short of the floor.
+    r"((?:[?&]|&amp;)(?:apikey|api_key|key|token|access_token|auth_token)=)"
+    r"[A-Za-z0-9_\-.~%+/=]{16,}",
     re.IGNORECASE,
 )
 
