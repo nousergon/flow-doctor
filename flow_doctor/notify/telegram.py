@@ -28,7 +28,7 @@ import json
 import logging
 import re
 import sys
-from typing import Any, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -70,7 +70,7 @@ _DECLARED_LINE_RE = re.compile(
 )
 
 
-def _split_declared_footer(message: str) -> tuple:
+def _split_declared_footer(message: str) -> Tuple[str, Optional[str], Optional[str]]:
     """Return ``(message_without_footer_lines, auto_fix, resolution)``.
 
     A sender that already knows its own ``Auto-fix:`` / ``Resolution:`` writes
@@ -81,8 +81,8 @@ def _split_declared_footer(message: str) -> tuple:
     ``with_auto_fix`` / ``with_resolution``; it moves to the footer so it
     survives truncation.
     """
-    found = {}
-    kept = []
+    found: Dict[str, str] = {}
+    kept: List[str] = []
     for line in (message or "").splitlines():
         m = _DECLARED_LINE_RE.match(line)
         if m and m.group(2).strip() and m.group(1).lower() not in found:
