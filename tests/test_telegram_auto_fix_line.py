@@ -131,3 +131,56 @@ def test_describe_without_issue_filing_still_names_the_sweep():
     text = _describe_auto_fix(cfg, [])
     assert text.startswith("A matching remediation playbook runs automatically")
     assert "nightly sweep" in text
+
+
+# ── Caller-declared footer lines and informational reports (11-05 intake) ──
+# Measured 2026-11-04/05 in s3://alpha-engine-research/ops/alerts/v1/: the
+# sf-telegram-notifier body carried "Auto-fix: none. Unclassified failure ..."
+# and flow-doctor appended a contradicting default under it; a SUCCEEDED
+# (severity info) notice said "root-causes it" and "none tracked yet".
+
+
+def test_caller_declared_lines_replace_the_default_footer():
+    msg = "Post-close SF FAILED\nCause: X\nAuto-fix: none. Unclassified.\nResolution: aec#13255 (plan)"
+    text = TelegramNotifier._format_message(
+        _report(error_type=None, error_message=msg), "f", auto_fix="Wiring default."
+    )
+    assert text.count("Auto-fix:") == 1 and text.count("Resolution:") == 1
+    assert text.endswith("*Auto-fix:* none. Unclassified.\n*Resolution:* aec#13255 (plan)")
+    assert "Cause: X" in text
+
+
+def test_caller_declared_resolution_wins_over_a_filed_issue():
+    msg = "boom\nResolution: aec#13255"
+    text = TelegramNotifier._format_message(
+        _report(error_message=msg), "f", auto_fix="Filed.", resolution="https://x/issues/1"
+    )
+    assert text.endswith("*Auto-fix:* Filed.\n*Resolution:* aec#13255")
+
+
+def test_only_auto_fix_declared_keeps_the_default_resolution():
+    msg = "boom\nAuto-fix: retried once."
+    text = TelegramNotifier._format_message(_report(error_message=msg), "f", auto_fix="W.")
+    assert text.endswith(f"*Auto-fix:* retried once.\n*Resolution:* {tgmod.DEFAULT_RESOLUTION}")
+
+
+def test_informational_report_says_nothing_to_fix():
+    text = TelegramNotifier._format_message(
+        _report(error_type=None, error_message="Pre-open SF SUCCEEDED", severity="info"),
+        "f", auto_fix="Wiring default; tonight's sweep root-causes it.",
+    )
+    assert text.endswith(
+        f"*Auto-fix:* {tgmod.INFORMATIONAL}\n*Resolution:* {tgmod.INFORMATIONAL}"
+    )
+    assert "none tracked yet" not in text
+
+
+def test_declared_footer_survives_truncation():
+    msg = "x\n" + ("l" * 200 + "\n") * 40 + "Resolution: aec#13255"
+    text = TelegramNotifier._format_message(
+        _report(error_message=msg, logs="\n".join("l" * 200 for _ in range(100))), "f",
+        auto_fix="Filed.",
+    )
+    out = tgmod._truncate_keeping_auto_fix(text)
+    assert len(out) <= tgmod._MAX_MESSAGE_LEN
+    assert out.endswith("*Auto-fix:* Filed.\n*Resolution:* aec#13255")

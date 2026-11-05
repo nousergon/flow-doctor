@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixed
+
+- **A Telegram alert's `Auto-fix:` / `Resolution:` lines now come from its sender when the sender wrote them** (alpha-engine-config-I13257). A line already in the report message moves to the footer in place of the wiring's default, so one alert no longer carries two contradicting `Auto-fix:` lines, and a sender can name the issue that resolves its alert by writing one line. A caller-declared `Resolution:` wins over the issue flow-doctor filed (krepis `with_resolution` rule). Reports with severity `info` with nothing declared now say `none needed (informational, nothing is broken).` on both lines, not "root-causes it" and "none tracked yet".
+
 ### Added
 
 - **The diagnosis call's `llm_trace.v1` row now carries typed source citations** (alpha-engine-config-I12312). `RouterProvider.diagnose` passes krepis `sources=` naming each prompt section the model reads as evidence: the exception, traceback, captured logs, commit-range context, git log, changed files and known failure patterns. Each one is an `artifact` source with `source_id` `flow-doctor/report/<report id>#<section>`, and `DiagnosisContext` gains `report_id` for this. Sections are located verbatim in the prompt that is sent (`ContextAssembler.locate_sources`), so the prompt is byte-for-byte unchanged (`build_prompt` is now a join of `_sections`). The trace's `citations[]` record each section's sha256 and offsets.

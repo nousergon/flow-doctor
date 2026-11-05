@@ -60,6 +60,36 @@ DEFAULT_RESOLUTION = (
     "lists the options and a recommended fix."
 )
 _RESOLUTION_RE = re.compile(r"(?im)^[ \t]*[*_<b>]*resolution[*_]?[ \t]*:")
+#: Both footer lines on an informational report (severity ``info``), whose
+#: sender declared neither: a success notice has nothing to root-cause and
+#: no issue to name. Same words as krepis ``AUTO_FIX_NOT_NEEDED``.
+INFORMATIONAL = "none needed (informational, nothing is broken)."
+#: A footer line the caller already wrote inside its message, captured whole.
+_DECLARED_LINE_RE = re.compile(
+    r"(?im)^[ \t]*[*_<b>]*(auto-fix|resolution)[*_]?[ \t]*:[*_]?[ \t]*(.*)$"
+)
+
+
+def _split_declared_footer(message: str) -> tuple:
+    """Return ``(message_without_footer_lines, auto_fix, resolution)``.
+
+    A sender that already knows its own ``Auto-fix:`` / ``Resolution:`` writes
+    them in the message (sf-telegram-notifier classifies every failure that
+    way). Rendering the wiring's default footer under it put two contradicting
+    lines in one alert, and the sender had no way to name the issue that
+    resolves it. A line the caller wrote wins, the same rule as krepis
+    ``with_auto_fix`` / ``with_resolution``; it moves to the footer so it
+    survives truncation.
+    """
+    found = {}
+    kept = []
+    for line in (message or "").splitlines():
+        m = _DECLARED_LINE_RE.match(line)
+        if m and m.group(2).strip() and m.group(1).lower() not in found:
+            found[m.group(1).lower()] = m.group(2).strip()
+            continue
+        kept.append(line)
+    return "\n".join(kept), found.get("auto-fix"), found.get("resolution")
 
 
 def resolution_for_issue(issue_url: str) -> str:
@@ -399,10 +429,13 @@ class TelegramNotifier(Notifier):
             f"{emoji} *\\[{report.severity.upper()}\\] {flow_name}*",
             "",
         ]
+        message, declared_fix, declared_resolution = _split_declared_footer(
+            report.error_message
+        )
         if report.error_type:
-            lines.append(f"*Error:* `{report.error_type}: {report.error_message}`")
+            lines.append(f"*Error:* `{report.error_type}: {message}`")
         else:
-            lines.append(f"*Message:* {report.error_message}")
+            lines.append(f"*Message:* {message}")
 
         if report.cascade_source:
             lines.append(
@@ -444,8 +477,13 @@ class TelegramNotifier(Notifier):
             lines.append(f"_{report.diagnosis_error[:300]}_")
 
         lines.append(f"\n_Report ID: {report.id}_")
-        lines.append(f"\n*Auto-fix:* {auto_fix or DEFAULT_AUTO_FIX}")
-        lines.append(f"*Resolution:* {resolution or DEFAULT_RESOLUTION}")
+        informational = (report.severity or "").lower() == "info"
+        fix = declared_fix or (INFORMATIONAL if informational else auto_fix) or DEFAULT_AUTO_FIX
+        res = declared_resolution or resolution or (
+            INFORMATIONAL if informational else DEFAULT_RESOLUTION
+        )
+        lines.append(f"\n*Auto-fix:* {fix}")
+        lines.append(f"*Resolution:* {res}")
         return "\n".join(lines)
 
 
