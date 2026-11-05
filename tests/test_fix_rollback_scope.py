@@ -1,10 +1,12 @@
-"""The auto-fix rollback undoes its own patch and nothing else (alpha-engine-config-I12898).
+"""Auto-fix never discards the caller's unrelated work (alpha-engine-config-I12898).
 
 ``_revert_changes`` used to run ``git checkout .`` over the whole checkout, so a
 dry run or a failed validation discarded every unrelated tracked edit in the
-caller's working tree. These drive the real ``generate_fix`` against a real
-temporary repository holding unrelated tracked and untracked work, and assert
-that work is byte-for-byte unchanged on every path that rolls back.
+caller's working tree. The fix is now applied and tested in an owned worktree
+(``flow_doctor.fix.worktree``), so there is no caller-side rollback at all.
+These drive the real ``generate_fix`` against a real temporary repository
+holding unrelated tracked and untracked work, and assert that work is
+byte-for-byte unchanged on every path that used to roll back.
 """
 
 from __future__ import annotations
@@ -16,8 +18,7 @@ from unittest.mock import patch
 
 import pytest
 
-from flow_doctor.fix.cli import FixOutcome, _revert_changes, generate_fix
-from flow_doctor.fix.scope_guard import patch_inventory
+from flow_doctor.fix.cli import FixOutcome, generate_fix
 
 _GIT_ID = ["-c", "user.email=t@example.invalid", "-c", "user.name=t"]
 UNRELATED_TRACKED = b"UNRELATED_UNCOMMITTED_WORK\n"
@@ -156,20 +157,28 @@ def test_a_patch_that_will_not_apply_changes_nothing(tmp_path: Path, repo: Path)
     _assert_untouched(repo)
 
 
-def test_revert_changes_never_runs_a_whole_tree_checkout(repo: Path) -> None:
-    diff = _diff(repo, {"src/main.py": "x = 2\n"})
-    inventory, _ = patch_inventory(str(repo), diff)
-    subprocess.run(["git", "apply", "-"], input=diff, cwd=repo, check=True, text=True)
+def test_no_git_command_mutates_the_callers_checkout(tmp_path: Path, repo: Path) -> None:
+    """Every apply, test and discard runs in the run's own worktree.
+
+    Supersedes the ``_revert_changes`` unit test: there is no caller-side
+    rollback left to scope, because nothing is written to the caller's tree.
+    """
+    diff = _diff(repo, {"src/main.py": "x = 2\n", "src/new.py": "z = 1\n"})
     _dirty(repo)
     calls = []
     real = subprocess.run
 
     def spy(cmd, *a, **kw):
-        calls.append(list(cmd))
+        calls.append((list(cmd) if not isinstance(cmd, str) else [cmd], kw.get("cwd")))
         return real(cmd, *a, **kw)
 
     with patch("subprocess.run", spy):
-        assert _revert_changes(str(repo), diff, inventory)
-    assert ["git", "checkout", "."] not in calls
+        outcome, msg = _run(tmp_path, repo, diff, "true")
+    assert outcome is FixOutcome.CREATED, msg
+    mutating = {"checkout", "reset", "clean", "stash", "add", "commit", "restore", "rm"}
+    in_caller = [c for c, cwd in calls if cwd is not None and Path(cwd) == repo]
+    assert not [c for c in in_caller if c[:1] == ["git"] and len(c) > 1 and c[1] in mutating]
+    assert not [c for c in in_caller if c[:2] == ["git", "apply"] and "--cached" not in c]
     assert (repo / "src/main.py").read_bytes() == b"x = 1\n"
+    assert not (repo / "src/new.py").exists()
     _assert_untouched(repo)

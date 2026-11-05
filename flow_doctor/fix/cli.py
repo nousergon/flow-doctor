@@ -26,6 +26,7 @@ from flow_doctor.fix.scope_guard import (
     tracked_files,
 )
 from flow_doctor.fix.validator import TestValidator
+from flow_doctor.fix.worktree import OwnedWorktree
 from flow_doctor.notify.github import GitHubNotifier
 
 
@@ -437,11 +438,12 @@ def generate_fix(
         _comment_skipped(repo, issue_number, token, msg)
         return (FixOutcome.SKIPPED, msg)
 
-    # The rollback below undoes exactly this patch and nothing else, so it may
-    # only run over paths that were clean before the apply. A patch touching a
-    # file with uncommitted edits is refused before anything is written: the
-    # rollback could not tell those edits from the patch's, and the commit
-    # would carry them (alpha-engine-config-I12898).
+    # The patch is generated from the caller's files but applied to a clean
+    # worktree at the caller's HEAD, so a patch touching a file with
+    # uncommitted edits is refused before anything is written: those edits
+    # would be silently dropped from what the fix was written against, and
+    # the PR would conflict with them (alpha-engine-config-I12898). Every path
+    # the patch touches is therefore byte-identical in the caller and at HEAD.
     dirty_before = changed_paths(repo_path)
     if dirty_before is None:
         msg = "git status unavailable — refusing to apply without a rollback baseline"
@@ -456,19 +458,63 @@ def generate_fix(
         _comment_skipped(repo, issue_number, token, msg)
         return (FixOutcome.SKIPPED, msg)
 
+    # Apply, test, commit and push in an owned, detached worktree at the
+    # caller's resolved HEAD, never in the caller's checkout: a dry run, a
+    # failed validation or a success leaves the caller's files, index and
+    # branch exactly as they were, and concurrent runs never share a tree.
+    # The worktree is disposed of on every exit (alpha-engine-config-I12898).
+    worktree, why = OwnedWorktree.create(repo_path)
+    if worktree is None:
+        msg = f"Could not create an isolated worktree for the fix: {why}"
+        _comment_failure(repo, issue_number, token, msg)
+        return (FixOutcome.FAILED, msg)
+    try:
+        return _apply_validate_publish(
+            config=config, repo=repo, issue_number=issue_number, token=token,
+            dry_run=dry_run, repo_path=repo_path, work_path=worktree.path,
+            diff=diff, inventory=inventory, flow_name=flow_name, category=category,
+            confidence=confidence, root_cause=root_cause, diagnosis_id=diagnosis_id,
+        )
+    finally:
+        worktree.remove()
+
+
+def _apply_validate_publish(
+    *,
+    config: FlowDoctorConfig,
+    repo: str,
+    issue_number: int,
+    token: str,
+    dry_run: bool,
+    repo_path: str,
+    work_path: str,
+    diff: str,
+    inventory: List[str],
+    flow_name: str,
+    category: str,
+    confidence: float,
+    root_cause: str,
+    diagnosis_id: str,
+) -> Tuple[FixOutcome, str]:
+    """Apply the approved patch in ``work_path``, test it, and open the PR.
+
+    ``work_path`` is the run's own worktree; ``repo_path`` (the caller's
+    checkout) is only read, and is where the push runs from.
+    """
+    af_config = config.auto_fix
+
     # Apply diff. A diff that won't apply is a genuine fault (malformed patch).
     # `git apply --check` runs first, so a refused apply has changed nothing.
-    if not PRCreator.apply_diff(repo_path, diff):
+    if not PRCreator.apply_diff(work_path, diff):
         msg = "Failed to apply generated diff"
         _comment_failure(repo, issue_number, token, msg)
         return (FixOutcome.FAILED, msg)
 
     # Independent check: what the apply actually changed must be inside the
-    # approved inventory. Undo exactly this patch if it is not.
-    after = changed_paths(repo_path)
-    stray = sorted((after or set()) - dirty_before - set(inventory)) if after is not None else []
+    # approved inventory. The worktree is fresh, so anything else is stray.
+    after = changed_paths(work_path)
+    stray = sorted(after - set(inventory)) if after is not None else []
     if after is None or stray:
-        _revert_changes(repo_path, diff, inventory)
         msg = (
             "Applied patch changed paths outside its approved inventory: "
             f"{', '.join(map(repr, stray)) or 'git status unavailable'}"
@@ -479,7 +525,7 @@ def generate_fix(
     # Run tests
     print(f"[flow-doctor] Running tests: {af_config.test_command}")
     validator = TestValidator()
-    test_passed, test_output = validator.run(af_config.test_command, repo_path)
+    test_passed, test_output = validator.run(af_config.test_command, work_path)
 
     # Record fix attempt
     attempt = FixAttempt(
@@ -490,33 +536,29 @@ def generate_fix(
     )
 
     if not test_passed:
-        # The validator correctly rejected a fix that broke tests and reverted
-        # it. Withholding the PR is the safety gate working as intended — a
-        # skip, not a fixer malfunction.
+        # The validator correctly rejected a fix that broke tests. Withholding
+        # the PR is the safety gate working as intended — a skip, not a fixer
+        # malfunction. The worktree holding the patch is discarded by the caller.
         attempt.rejection_reason = "Tests failed"
         _save_attempt(config, attempt)
-        if not _revert_changes(repo_path, diff, inventory):
-            msg = f"Tests failed and the patch could not be rolled back: {', '.join(inventory)}"
-            _comment_failure(repo, issue_number, token, msg)
-            return (FixOutcome.FAILED, msg)
         msg = f"Fix attempted but tests failed:\n```\n{test_output[:2000]}\n```"
         _comment_skipped(repo, issue_number, token, msg)
         return (FixOutcome.SKIPPED, "Tests failed after applying fix")
 
     # Dry run check
     if dry_run or af_config.dry_run:
-        if not _revert_changes(repo_path, diff, inventory):
-            msg = f"Dry run could not roll back the patch: {', '.join(inventory)}"
-            return (FixOutcome.FAILED, msg)
         print("[flow-doctor] Dry run — skipping PR creation")
         print(f"[flow-doctor] Generated diff:\n{diff}")
         return (FixOutcome.CREATED, "Dry run successful — fix generated and tests passed")
 
-    # Create branch, commit, push, PR
+    # Commit in the worktree, push an explicit refspec from the caller's
+    # checkout (no local branch, no checkout), then open the PR.
     base_branch = _get_default_branch(repo_path)
-    branch = PRCreator.create_branch(repo_path, flow_name)
+    branch = PRCreator.branch_name(flow_name)
     commit_msg = f"fix({flow_name}): auto-fix for {category.lower()} issue\n\nDiagnosis: {root_cause[:200]}\nIssue: #{issue_number}\n\nGenerated by Flow Doctor"
-    if not PRCreator.commit_and_push(repo_path, branch, commit_msg, paths=inventory):
+    if not PRCreator.commit_and_push(
+        work_path, branch, commit_msg, paths=inventory, push_from=repo_path,
+    ):
         msg = "Failed to push fix branch"
         _comment_failure(repo, issue_number, token, msg)
         return (FixOutcome.FAILED, msg)
@@ -650,54 +692,6 @@ def _save_attempt(config: FlowDoctorConfig, attempt: FixAttempt) -> None:
         storage.save_fix_attempt(attempt)
     except Exception:
         pass
-
-
-def _revert_changes(repo_path: str, diff: str, inventory: List[str]) -> bool:
-    """Undo exactly the applied patch; never touch any other path.
-
-    This used to be ``git checkout .`` over the whole checkout, which discarded
-    every unrelated tracked edit on a dry run or a failed validation
-    (alpha-engine-config-I12898). Now: reverse the patch itself; if the test
-    run has since edited a patched file so the reverse no longer applies,
-    restore exactly the inventory paths to HEAD (and remove the ones HEAD does
-    not have). That fallback is safe only because ``generate_fix`` refuses a
-    patch touching a path that was dirty before the apply.
-
-    Returns True when the inventory is back at HEAD.
-    """
-    import subprocess
-
-    if PRCreator.reverse_diff(repo_path, diff):
-        return True
-    print("[flow-doctor] Patch no longer reverses cleanly; restoring its "
-          f"{len(inventory)} path(s) to HEAD", file=sys.stderr)
-    root = Path(repo_path).resolve()
-    try:
-        listed = subprocess.run(
-            ["git", "ls-tree", "-r", "-z", "--name-only", "HEAD", "--",
-             *(f":(literal){p}" for p in inventory)],
-            cwd=repo_path, capture_output=True, text=True, check=True,
-        )
-        in_head = {p for p in listed.stdout.split("\0") if p}
-        if in_head:
-            subprocess.run(
-                ["git", "checkout", "HEAD", "--", *(f":(literal){p}" for p in sorted(in_head))],
-                cwd=repo_path, capture_output=True, check=True,
-            )
-        for rel in sorted(set(inventory) - in_head):
-            # Confine before touching: the containing directory must resolve
-            # inside the checkout; the entry itself is removed, never followed.
-            target = root / rel
-            parent = target.parent.resolve()
-            if parent != root and root not in parent.parents:
-                return False
-            target = parent / target.name
-            if target.is_symlink() or target.is_file():
-                target.unlink()
-    except (subprocess.CalledProcessError, OSError) as e:
-        print(f"[flow-doctor] Rollback failed: {e}", file=sys.stderr)
-        return False
-    return True
 
 
 def main() -> None:

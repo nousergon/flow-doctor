@@ -515,6 +515,14 @@ The fix-generation pipeline itself is the same either way:
 4. The CLI generates a diff via LLM, validates against scope rules, runs tests
 5. If tests pass, a PR is opened. If tests fail, a comment explains what went wrong.
 
+The patch is applied, tested and committed in a throwaway `git worktree` at the
+checkout's `HEAD` commit, never in the checkout itself, and the branch is pushed
+as an explicit refspec. Your working tree, index and current branch are left
+exactly as they were whatever the outcome, and two runs never share a tree.
+Tests therefore run against committed code plus the patch: uncommitted edits
+are not part of what is tested, and a patch touching a file with uncommitted
+edits is refused.
+
 **Safety gates** — fix generation is skipped when:
 - Confidence below threshold (default 90%)
 - Category is `EXTERNAL` or `INFRA` (nothing to fix in code)
