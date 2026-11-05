@@ -6,6 +6,7 @@ import hashlib
 import json
 import subprocess
 import sys
+import uuid
 from datetime import datetime
 from typing import List, Optional
 from urllib.request import Request, urlopen
@@ -15,17 +16,28 @@ class PRCreator:
     """Creates branches, applies diffs, and opens PRs."""
 
     @staticmethod
+    def branch_name(flow_name: str) -> str:
+        """A fresh fix branch name, e.g. ``flow-doctor/research-lambda/20260317-a1b2c3``.
+
+        The hash takes a random component as well as the time, so two runs
+        for one flow in the same instant still get distinct branches.
+        """
+        date_str = datetime.utcnow().strftime("%Y%m%d")
+        hash_input = f"{flow_name}-{datetime.utcnow().isoformat()}-{uuid.uuid4().hex}".encode()
+        short_hash = hashlib.sha256(hash_input).hexdigest()[:6]
+        return f"flow-doctor/{flow_name}/{date_str}-{short_hash}"
+
+    @staticmethod
     def create_branch(repo_path: str, flow_name: str) -> str:
-        """Create a new branch for the fix.
+        """Create and check out a new branch for the fix in ``repo_path``.
+
+        ``generate_fix`` no longer calls this: it commits in an owned worktree
+        and pushes an explicit refspec, so the caller's branch never moves.
 
         Returns:
             The branch name (e.g., flow-doctor/research-lambda/20260317-a1b2c3).
         """
-        date_str = datetime.utcnow().strftime("%Y%m%d")
-        # Short hash for uniqueness
-        hash_input = f"{flow_name}-{datetime.utcnow().isoformat()}".encode()
-        short_hash = hashlib.sha256(hash_input).hexdigest()[:6]
-        branch = f"flow-doctor/{flow_name}/{date_str}-{short_hash}"
+        branch = PRCreator.branch_name(flow_name)
 
         subprocess.run(
             ["git", "checkout", "-b", branch],
@@ -80,6 +92,7 @@ class PRCreator:
     @staticmethod
     def commit_and_push(
         repo_path: str, branch: str, message: str, paths: Optional[List[str]] = None,
+        push_from: Optional[str] = None,
     ) -> bool:
         """Stage the change, commit, and push the branch.
 
@@ -88,6 +101,14 @@ class PRCreator:
         inside ``paths`` before anything is committed — test residue or any
         other worktree change never rides the fix (alpha-engine-config-I12896).
         Without it, every change is staged (legacy behaviour).
+
+        With ``push_from``, ``repo_path`` is a detached worktree: the commit is
+        made there and pushed from ``push_from`` (the caller's checkout, which
+        shares its objects and holds the remote's credentials) as the explicit
+        refspec ``<commit>:refs/heads/<branch>``. No local branch is created,
+        no upstream is configured, and the caller's HEAD never moves
+        (alpha-engine-config-I12898). Without it, ``branch`` is pushed with
+        ``-u`` from ``repo_path`` (legacy behaviour).
 
         Returns:
             True on success.
@@ -120,9 +141,19 @@ class PRCreator:
                 ["git", "commit", "-m", message],
                 cwd=repo_path, check=True, capture_output=True,
             )
+            if push_from is None:
+                subprocess.run(
+                    ["git", "push", "-u", "origin", branch],
+                    cwd=repo_path, check=True, capture_output=True,
+                )
+                return True
+            commit = subprocess.run(
+                ["git", "rev-parse", "--verify", "HEAD^{commit}"],
+                cwd=repo_path, check=True, capture_output=True, text=True,
+            ).stdout.strip()
             subprocess.run(
-                ["git", "push", "-u", "origin", branch],
-                cwd=repo_path, check=True, capture_output=True,
+                ["git", "push", "origin", f"{commit}:refs/heads/{branch}"],
+                cwd=push_from, check=True, capture_output=True,
             )
             return True
         except subprocess.CalledProcessError as e:
