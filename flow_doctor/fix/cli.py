@@ -525,7 +525,7 @@ def _apply_validate_publish(
     # Run tests
     print(f"[flow-doctor] Running tests: {af_config.test_command}")
     validator = TestValidator()
-    test_passed, test_output = validator.run(af_config.test_command, work_path)
+    test_passed, test_output = validator.run(af_config.test_command, work_path, source_path=repo_path)
 
     # Record fix attempt
     attempt = FixAttempt(

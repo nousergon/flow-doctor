@@ -76,3 +76,19 @@ def test_run_combines_stdout_stderr():
     assert passed is True
     assert "output" in output
     assert "warnings" in output
+
+
+def test_imports_resolve_to_the_worktree_not_the_source_checkout(tmp_path, monkeypatch):
+    """codex dc27d7e2cef227b9: cwd alone let an inherited PYTHONPATH (or an
+    editable install) import the caller's unpatched checkout."""
+    import sys
+    for root, value in (("source", 1), ("work", 2)):
+        pkg = tmp_path / root / "src" / "fdprobe"
+        pkg.mkdir(parents=True)
+        (pkg / "__init__.py").write_text(f"VALUE = {value}\n")
+    monkeypatch.setenv("PYTHONPATH", str(tmp_path / "source" / "src"))
+    cmd = f'"{sys.executable}" -c "import fdprobe, sys; sys.exit(fdprobe.VALUE != 2)"'
+    passed, output = TestValidator().run(
+        cmd, str(tmp_path / "work"), source_path=str(tmp_path / "source"),
+    )
+    assert passed, output
