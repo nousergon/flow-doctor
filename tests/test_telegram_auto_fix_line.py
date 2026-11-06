@@ -184,3 +184,16 @@ def test_declared_footer_survives_truncation():
     out = tgmod._truncate_keeping_auto_fix(text)
     assert len(out) <= tgmod._MAX_MESSAGE_LEN
     assert out.endswith("*Auto-fix:* Filed.\n*Resolution:* aec#13255")
+
+
+def test_oversized_declared_footer_is_bounded():
+    """codex 4c7462a53b16aa9a: a declared Resolution line was preserved whole,
+    so the footer alone could exceed Telegram's 4096 and the alert 400."""
+    msg = "boom\nResolution: " + "r" * 5000
+    text = TelegramNotifier._format_message(
+        _report(error_message=msg, logs="\n".join("l" * 200 for _ in range(30))), "f",
+        auto_fix="Filed.",
+    )
+    out = tgmod._truncate_keeping_auto_fix(text)
+    assert len(out) <= tgmod._MAX_MESSAGE_LEN
+    assert "*Auto-fix:* Filed." in out and "*Resolution:* rrr" in out

@@ -482,9 +482,21 @@ class TelegramNotifier(Notifier):
         res = declared_resolution or resolution or (
             INFORMATIONAL if informational else DEFAULT_RESOLUTION
         )
-        lines.append(f"\n*Auto-fix:* {fix}")
-        lines.append(f"*Resolution:* {res}")
+        lines.append(f"\n*Auto-fix:* {_bound_footer_value(fix)}")
+        lines.append(f"*Resolution:* {_bound_footer_value(res)}")
         return "\n".join(lines)
+
+
+#: Ceiling on one footer value. The footer rides outside the truncation
+#: budget, so an unbounded declared line could alone exceed Telegram's 4096
+#: and get the whole alert rejected; two capped values always fit.
+_FOOTER_VALUE_MAX = 1000
+
+
+def _bound_footer_value(value: str) -> str:
+    if len(value) <= _FOOTER_VALUE_MAX:
+        return value
+    return value[: _FOOTER_VALUE_MAX - 1].rstrip() + "…"
 
 
 def _truncate_keeping_auto_fix(text: str) -> str:
@@ -495,7 +507,10 @@ def _truncate_keeping_auto_fix(text: str) -> str:
     if not sep:
         return _truncate(text)
     tail = sep + fix
-    keep = max(_MAX_MESSAGE_LEN - len(tail) - len(_TRUNCATION_SUFFIX), 0)
+    if len(tail) + len(_TRUNCATION_SUFFIX) > _MAX_MESSAGE_LEN:
+        # A footer that cannot fit is cut too; never send over the cap.
+        return _truncate(text)
+    keep = _MAX_MESSAGE_LEN - len(tail) - len(_TRUNCATION_SUFFIX)
     return head[:keep] + _TRUNCATION_SUFFIX + tail
 
 
