@@ -55,7 +55,7 @@ class TestValidator:
             return (False, f"Test command failed to execute: {e}")
 
 
-def _isolated_env(repo_path: str, source_path: Optional[str]) -> dict:
+def _isolated_env(repo_path: str, source_path: Optional[str]) -> "dict[str, str]":
     """``os.environ`` with ``PYTHONPATH`` pointed at ``repo_path`` first."""
     work = os.path.abspath(repo_path)
     src = os.path.abspath(source_path) if source_path else None
@@ -70,6 +70,6 @@ def _isolated_env(repo_path: str, source_path: Optional[str]) -> dict:
             absolute = os.path.join(work, os.path.relpath(absolute, src))
         if absolute not in entries:
             entries.append(absolute)
-    env = dict(os.environ)
+    env: "dict[str, str]" = dict(os.environ)
     env["PYTHONPATH"] = os.pathsep.join(entries)
     return env
