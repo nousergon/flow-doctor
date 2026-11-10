@@ -2,11 +2,20 @@
 
 from __future__ import annotations
 
-from datetime import datetime
-from typing import List, Optional
+from datetime import datetime, timezone
+from typing import List, Optional, TypedDict
 
 from flow_doctor.core.models import Diagnosis, KnownPattern
 from flow_doctor.storage.base import StorageBackend
+
+
+class _BootstrapPattern(TypedDict, total=False):
+    error_signature: str
+    category: str
+    root_cause: str
+    flow_name: Optional[str]
+    resolution: Optional[str]
+    auto_fixable: bool
 
 
 class KnowledgeBase:
@@ -17,7 +26,7 @@ class KnowledgeBase:
     2. Confirmed diagnoses (via feedback loop)
     """
 
-    def __init__(self, store: StorageBackend):
+    def __init__(self, store: StorageBackend) -> None:
         self.store = store
 
     def lookup(self, error_signature: str, report_id: str, flow_name: str) -> Optional[Diagnosis]:
@@ -60,11 +69,12 @@ class KnowledgeBase:
             resolution=diagnosis.remediation,
             auto_fixable=diagnosis.auto_fixable or False,
             hit_count=1,
-            last_seen=datetime.utcnow(),
+            # Preserve the existing naive UTC timestamp representation.
+            last_seen=datetime.now(timezone.utc).replace(tzinfo=None),
         )
         self.store.save_known_pattern(pattern)
 
-    def bootstrap(self, patterns: List[dict]) -> None:
+    def bootstrap(self, patterns: List[_BootstrapPattern]) -> None:
         """Seed the knowledge base with known failure patterns.
 
         Each dict should have: error_signature, category, root_cause,
