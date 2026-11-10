@@ -20,8 +20,30 @@ from __future__ import annotations
 
 import os
 import sys
+from typing import Dict, Optional, Protocol, Tuple, cast
 
 from flow_doctor.core.constants import LLM_MAX_TOKENS
+
+
+class _EdgeSpec(Protocol):
+    """Fields read from the opaque krepis edge specification."""
+
+    @property
+    def provider(self) -> str: ...
+
+    @property
+    def model(self) -> str: ...
+
+
+class _ResolveGroupSpec(Protocol):
+    def __call__(
+        self,
+        model_group: str,
+        *,
+        exec_context: Optional[str],
+        wire: str,
+        max_tokens: int,
+    ) -> Tuple[_EdgeSpec, Dict[str, object]]: ...
 
 
 class RouterUnresolvable(RuntimeError):
@@ -50,7 +72,7 @@ COMPELLED_ROUTES = frozenset({"litellm_proxy", "egress_proxy"})
 
 def resolve_router_edge(
     model_group: str, *, max_tokens: int = LLM_MAX_TOKENS, log_prefix: str = "flow-doctor"
-):
+) -> _EdgeSpec:
     """Resolve ``model_group`` to a callable ``edge_spec`` via krepis.
 
     Raises :class:`RouterUnresolvable` on any failure — krepis missing, the
@@ -72,7 +94,10 @@ def resolve_router_edge(
     # from a hostname or metadata lookup.
     exec_context = os.environ.get("KREPIS_EXEC_CONTEXT") or None
     try:
-        edge_spec, route = resolve_group_spec(
+        # krepis is optional and unavailable to the type checker; describe
+        # only the resolver contract used at this boundary.
+        resolver = cast(_ResolveGroupSpec, resolve_group_spec)
+        edge_spec, route = resolver(
             model_group,
             exec_context=exec_context,
             # The router edge speaks OpenAI-compatible chat completions;

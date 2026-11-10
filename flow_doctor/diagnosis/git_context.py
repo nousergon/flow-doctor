@@ -6,9 +6,26 @@ import json
 import re
 import subprocess
 import sys
-from typing import Dict, Optional
-from urllib.error import URLError
+from typing import Dict, List, Optional, Set, TypedDict, cast
 from urllib.request import Request, urlopen
+
+
+class _CommitMessage(TypedDict):
+    message: str
+
+
+class _Commit(TypedDict):
+    sha: str
+    commit: _CommitMessage
+
+
+class _ChangedFile(TypedDict):
+    filename: str
+
+
+class _CommitDetail(TypedDict, total=False):
+    files: List[_ChangedFile]
+
 
 # Deploy-drift errors carry two SHAs and the LLM cannot infer ordering
 # from the error string alone.  Extract them deterministically so we can
@@ -140,7 +157,7 @@ class GitContextLoader:
         if len(shas) < 2:
             return None
         # Try the first two distinct SHAs
-        unique = []
+        unique: List[str] = []
         for s in shas:
             if s not in unique:
                 unique.append(s)
@@ -169,7 +186,8 @@ class GitContextLoader:
             url = f"https://api.github.com/repos/{repo}/commits?per_page=20"
             req = Request(url, headers=headers)
             with urlopen(req, timeout=10) as resp:
-                commits = json.loads(resp.read().decode())
+                # JSON has no static schema; GitHub defines this response shape.
+                commits = cast(List[_Commit], json.loads(resp.read().decode()))
 
             git_log_lines = []
             for commit in commits[:20]:
@@ -179,13 +197,14 @@ class GitContextLoader:
             git_log = "\n".join(git_log_lines)
 
             # Get changed files from most recent commits (first 5)
-            changed_files_set: set = set()
+            changed_files_set: Set[str] = set()
             for commit in commits[:5]:
                 sha = commit["sha"]
                 detail_url = f"https://api.github.com/repos/{repo}/commits/{sha}"
                 detail_req = Request(detail_url, headers=headers)
                 with urlopen(detail_req, timeout=10) as resp:
-                    detail = json.loads(resp.read().decode())
+                    # As above, use the GitHub commit-detail response contract.
+                    detail = cast(_CommitDetail, json.loads(resp.read().decode()))
                 for f in detail.get("files", []):
                     changed_files_set.add(f["filename"])
 

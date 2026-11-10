@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import platform
-from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from dataclasses import dataclass
+from typing import Dict, List, Optional, Set, Tuple
 
 from flow_doctor.core.models import KnownPattern, Report
 
@@ -254,7 +254,7 @@ class ContextAssembler:
             return logs
 
         lines = logs.splitlines()
-        important_indices: set = set()
+        important_indices: Set[int] = set()
 
         # Always include last 200 lines
         tail_start = max(0, len(lines) - 200)
