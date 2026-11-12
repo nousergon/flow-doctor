@@ -18,4 +18,4 @@ permissions:
 
 jobs:
   guard:
-    uses: nousergon/nousergon-lib/.github/workflows/pr-path-guard.yml@ac511423ef5211e2c3134fb85a76a29d81000754
+    uses: nousergon/nousergon-lib/.github/workflows/pr-path-guard.yml@02631f1accd98a1e5f20ab79299c5759c37022d5
