@@ -3,7 +3,19 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, List, Optional, Pattern
+from typing import Dict, List, Optional, Pattern, Union
+
+# Values ``scrub_dict`` walks: strings and nested dicts/lists of them, plus the
+# leaves (numbers, bools, None) it passes through untouched.
+_Scrubbable = Union[
+    str,
+    int,
+    float,
+    bool,
+    None,
+    Dict[str, "_Scrubbable"],
+    List["_Scrubbable"],
+]
 
 # Default secret patterns
 _DEFAULT_PATTERNS: List[Pattern[str]] = [
@@ -79,7 +91,7 @@ class Scrubber:
 
     def scrub_env_vars(self, env: Dict[str, str]) -> Dict[str, str]:
         """Scrub secret environment variable values."""
-        scrubbed = {}
+        scrubbed: Dict[str, str] = {}
         for key, value in env.items():
             if self._is_secret_env_name(key):
                 scrubbed[key] = REDACTED
@@ -87,9 +99,9 @@ class Scrubber:
                 scrubbed[key] = value
         return scrubbed
 
-    def scrub_dict(self, d: Dict[str, Any]) -> Dict[str, Any]:
+    def scrub_dict(self, d: Dict[str, _Scrubbable]) -> Dict[str, _Scrubbable]:
         """Recursively scrub secrets from a dictionary."""
-        result = {}
+        result: Dict[str, _Scrubbable] = {}
         for key, value in d.items():
             if self._is_secret_key(key):
                 result[key] = REDACTED
