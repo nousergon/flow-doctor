@@ -56,13 +56,13 @@ def build_fix_prompt(
 ) -> str:
     """Build the user prompt for fix generation."""
     # Format file contents
-    file_sections = []
+    file_sections: List[str] = []
     for path, content in file_contents.items():
         file_sections.append(f"### `{path}`\n```\n{content}\n```")
     file_str = "\n\n".join(file_sections) if file_sections else "(no file contents available)"
 
     # Format test contents
-    test_sections = []
+    test_sections: List[str] = []
     for path, content in test_contents.items():
         test_sections.append(f"### `{path}`\n```\n{content}\n```")
     test_str = "\n\n".join(test_sections) if test_sections else "(no test files found)"

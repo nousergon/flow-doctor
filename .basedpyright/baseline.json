@@ -3822,40 +3822,6 @@
                 }
             }
         ],
-        "./flow_doctor/fix/prompts.py": [
-            {
-                "code": "reportUnknownMemberType",
-                "range": {
-                    "startColumn": 8,
-                    "endColumn": 28,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportUnknownArgumentType",
-                "range": {
-                    "startColumn": 27,
-                    "endColumn": 40,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportUnknownMemberType",
-                "range": {
-                    "startColumn": 8,
-                    "endColumn": 28,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportUnknownArgumentType",
-                "range": {
-                    "startColumn": 27,
-                    "endColumn": 40,
-                    "lineCount": 1
-                }
-            }
-        ],
         "./flow_doctor/fix/replay_store.py": [
             {
                 "code": "reportUnusedImport",
