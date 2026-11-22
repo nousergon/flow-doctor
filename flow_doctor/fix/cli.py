@@ -678,9 +678,17 @@ def _comment_skipped(repo: str, issue_number: int, token: str, reason: str) -> N
 
 def _comment_failure(repo: str, issue_number: int, token: str, reason: str) -> None:
     """Comment that the fixer itself failed — a genuine error worth attention."""
+    # Print FIRST: the reason must reach the CI log even when posting the
+    # comment fails or raises (alpha-engine-config-I13872).
+    print(f"[flow-doctor] Fix FAILED: {reason}", file=sys.stderr, flush=True)
     body = f"⚠️ **Flow Doctor Auto-Fix:** fix generation failed.\n\n**Reason:** {reason}"
-    GitHubNotifier.comment_on_issue(repo, issue_number, body, token)
-    print(f"[flow-doctor] Fix FAILED: {reason}", file=sys.stderr)
+    try:
+        posted = GitHubNotifier.comment_on_issue(repo, issue_number, body, token)
+    except Exception as e:  # noqa: BLE001 - the reason is already printed
+        print(f"[flow-doctor] Failure comment on #{issue_number} not posted: {e}", file=sys.stderr)
+        return
+    if posted is False:
+        print(f"[flow-doctor] Failure comment on #{issue_number} not posted", file=sys.stderr)
 
 
 def _save_attempt(config: FlowDoctorConfig, attempt: FixAttempt) -> None:
