@@ -486,3 +486,55 @@ def test_skip_posts_informational_not_failure_comment():
     assert "not an error" in body.lower()
     # Must NOT carry the failure framing reserved for genuine malfunctions.
     assert "fix generation failed" not in body.lower()
+
+
+# --- Failure output visibility (alpha-engine-config-I13872) ---
+
+_NO_METADATA_ISSUE = {"body": "an issue with no metadata block"}
+
+
+def test_failure_reason_printed_when_comment_post_raises(capsys):
+    """The reason reaches stderr even if the failure comment itself raises."""
+    with patch("flow_doctor.fix.cli.fetch_issue", return_value=_NO_METADATA_ISSUE), \
+         patch(
+             "flow_doctor.fix.cli.GitHubNotifier.comment_on_issue",
+             side_effect=RuntimeError("boom"),
+         ):
+        outcome, msg = generate_fix(
+            issue_number=42, repo="owner/repo", token="tok",
+            config_path=None, dry_run=True,
+        )
+
+    assert outcome is FixOutcome.FAILED
+    err = capsys.readouterr().err
+    assert "Fix FAILED: " + msg in err
+    assert "not posted" in err
+
+
+def test_failure_reason_printed_when_comment_returns_false(capsys):
+    with patch("flow_doctor.fix.cli.fetch_issue", return_value=_NO_METADATA_ISSUE), \
+         patch("flow_doctor.fix.cli.GitHubNotifier.comment_on_issue", return_value=False):
+        outcome, msg = generate_fix(
+            issue_number=42, repo="owner/repo", token="tok",
+            config_path=None, dry_run=True,
+        )
+
+    assert outcome is FixOutcome.FAILED
+    err = capsys.readouterr().err
+    assert "Fix FAILED: " + msg in err
+    assert "not posted" in err
+
+
+def test_main_prints_reason_and_exits_nonzero_on_fetch_failure(capsys):
+    """A failure with no comment at all (fetch error) still prints its reason."""
+    import pytest
+    from flow_doctor.fix.cli import main
+
+    with patch("flow_doctor.fix.cli.fetch_issue", side_effect=OSError("net down")), \
+         patch("sys.argv", ["flow-doctor", "generate-fix", "--issue-number", "1",
+                            "--repo", "o/r", "--token", "t"]), \
+         pytest.raises(SystemExit) as exc:
+        main()
+
+    assert exc.value.code == 1
+    assert "net down" in capsys.readouterr().out
